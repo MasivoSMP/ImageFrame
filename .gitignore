@@ -8,6 +8,8 @@
 # IntelliJ
 out/
 
+# build tools
+buildtools/
 # Compiled class file
 *.class
 

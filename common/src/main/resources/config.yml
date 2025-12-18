@@ -119,5 +119,78 @@ Hooks:
     #Enable this if your players below 1.13 is having network issues
     DisableSmoothAnimationForLegacyPlayers: false
 
+#GUI settings (Used by /imageframe list)
+Gui:
+  List:
+    #Supported placeholders: {Owner}, {OwnerUUID}, {Page}, {PageMax}, {Total}
+    Title: "&3ImageFrame - &b{Owner}"
+    EmptyMessage: "&7You have no ImageMaps."
+    #CustomModelData is stored as an integer in Minecraft; float values will be rounded.
+    Filler:
+      Material: GRAY_STAINED_GLASS_PANE
+      Name: " "
+      Lore: []
+      CustomModelData: 0.0
+    Previous:
+      Material: ARROW
+      Name: "&ePrevious Page"
+      Lore: []
+      CustomModelData: 0.0
+    PreviousDisabled:
+      Material: BARRIER
+      Name: "&8Previous Page"
+      Lore: []
+      CustomModelData: 0.0
+    Next:
+      Material: ARROW
+      Name: "&eNext Page"
+      Lore: []
+      CustomModelData: 0.0
+    NextDisabled:
+      Material: BARRIER
+      Name: "&8Next Page"
+      Lore: []
+      CustomModelData: 0.0
+    Refresh:
+      Material: SLIME_BALL
+      Name: "&aRefresh"
+      Lore: []
+      CustomModelData: 0.0
+    Close:
+      #Shown in the "Back" slot on page 1 (closes the menu)
+      Material: BARRIER
+      Name: "&cClose"
+      Lore: []
+      CustomModelData: 0.0
+    #Supported placeholders: {ImageID}, {Name}, {Width}, {Height}, {CreatorName}, {CreatorUUID}, {TimeCreated}
+    ImageIcon:
+      Material: FILLED_MAP
+      Name: "&b{Name}"
+      Lore:
+        - "&7ID: &e{ImageID}"
+        - "&7Size: &e{Width} x {Height}"
+        - "&7Created: &e{TimeCreated}"
+        - "&aLeft-click: Rename"
+        - "&cRight-click: Delete"
+      CustomModelData: 0.0
+  ConfirmDelete:
+    #Supported placeholders: {Name}, {ImageID}, {Owner}, {OwnerUUID}, {Page}
+    Title: "&cDelete &e{Name}&c?"
+    Filler:
+      Material: GRAY_STAINED_GLASS_PANE
+      Name: " "
+      Lore: []
+      CustomModelData: 0.0
+    Confirm:
+      Material: LIME_WOOL
+      Name: "&aConfirm Delete"
+      Lore: []
+      CustomModelData: 0.0
+    Cancel:
+      Material: RED_WOOL
+      Name: "&eCancel"
+      Lore: []
+      CustomModelData: 0.0
+
 #Enable update notifications for admins
 Updater: true

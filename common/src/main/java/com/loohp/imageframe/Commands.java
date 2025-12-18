@@ -21,6 +21,7 @@
 package com.loohp.imageframe;
 
 import com.loohp.imageframe.api.events.ImageMapUpdatedEvent;
+import com.loohp.imageframe.gui.ImageListMenu;
 import com.loohp.imageframe.migration.ExternalPluginMigration;
 import com.loohp.imageframe.migration.PluginMigrationRegistry;
 import com.loohp.imageframe.objectholders.BlockPosition;
@@ -980,19 +981,27 @@ public class Commands implements CommandExecutor, TabCompleter {
             return true;
         } else if (args[0].equalsIgnoreCase("list")) {
             if (sender.hasPermission("imageframe.list")) {
-                Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
-                    OfflinePlayer player = null;
-                    if (args.length > 1) {
-                        player = Bukkit.getOfflinePlayer(args[1]);
-                    } else if (sender instanceof Player) {
-                        player = (Player) sender;
-                    }
-                    if (player == null) {
-                        sendMessage(sender, translatable(NO_CONSOLE).color(NamedTextColor.RED));
+                if (sender instanceof Player) {
+                    Player viewer = (Player) sender;
+                    OfflinePlayer target = args.length > 1 ? Bukkit.getOfflinePlayer(args[1]) : viewer;
+                    if (!target.equals(viewer) && !sender.hasPermission("imageframe.list.others")) {
+                        sendMessage(sender, translatable(NO_PERMISSION).color(NamedTextColor.RED));
                     } else {
-                        if (!player.equals(sender) && !sender.hasPermission("imageframe.list.others")) {
-                            sendMessage(sender, translatable(NO_PERMISSION).color(NamedTextColor.RED));
+                        ImageListMenu.open(viewer, target);
+                    }
+                } else {
+                    Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
+                        OfflinePlayer player = null;
+                        if (args.length > 1) {
+                            player = Bukkit.getOfflinePlayer(args[1]);
+                        }
+                        if (player == null) {
+                            sendMessage(sender, translatable(NO_CONSOLE).color(NamedTextColor.RED));
                         } else {
+                            if (!sender.hasPermission("imageframe.list.others")) {
+                                sendMessage(sender, translatable(NO_PERMISSION).color(NamedTextColor.RED));
+                                return;
+                            }
                             Component prefix = translatable(MAP_LOOKUP, player.getName() == null ? "" : player.getName(), player.getUniqueId()).color(NamedTextColor.AQUA);
                             Component suffix = ImageFrame.imageMapManager.getFromCreator(player.getUniqueId(), Comparator.comparing(each -> each.getCreationTime()))
                                     .stream()
@@ -1004,8 +1013,8 @@ public class Commands implements CommandExecutor, TabCompleter {
                             Component message = prefix.append(text(" [").color(NamedTextColor.AQUA)).append(suffix).append(text("]").color(NamedTextColor.AQUA));
                             sendMessage(sender, message);
                         }
-                    }
-                });
+                    });
+                }
             } else {
                 sendMessage(sender, translatable(NO_PERMISSION).color(NamedTextColor.RED));
             }

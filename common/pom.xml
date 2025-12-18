@@ -112,6 +112,32 @@
             </plugin>
 
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>copy-plugin-jar-to-root</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="../target"/>
+                                <copy todir="../target" overwrite="true">
+                                    <fileset dir="target">
+                                        <include name="ImageFrame-*.jar"/>
+                                        <exclude name="original-*.jar"/>
+                                    </fileset>
+                                </copy>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
+            <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.8.1</version>
                 <configuration>
@@ -225,7 +251,7 @@
         </repository>
         <repository>
             <id>paper-repo</id>
-            <url>https://papermc.io/repo/repository/maven-public/</url>
+            <url>https://repo.papermc.io/repository/maven-public/</url>
         </repository>
         <repository>
             <id>sonatype</id>
@@ -332,13 +358,13 @@
         <dependency>
             <groupId>dev.folia</groupId>
             <artifactId>folia-api</artifactId>
-            <version>1.20.6-R0.1-SNAPSHOT</version>
+            <version>1.21.8-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>org.spigotmc</groupId>
             <artifactId>spigot-api</artifactId>
-            <version>1.20.6-R0.1-SNAPSHOT</version>
+            <version>1.21.8-R0.1-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -355,151 +381,7 @@
         </dependency>
         <dependency>
             <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_16</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_16_2</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_16_4</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_17</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_18</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_18_2</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_19</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_19_3</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_19_4</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_20</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_20_2</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_20_3</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_20_5</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_20_6</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_1</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_2</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_3</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_4</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_5</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_6</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_7</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
             <artifactId>ImageFrame-V1_21_8</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_9</artifactId>
-            <version>${project.version}</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>com.loohp</groupId>
-            <artifactId>ImageFrame-V1_21_10</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>

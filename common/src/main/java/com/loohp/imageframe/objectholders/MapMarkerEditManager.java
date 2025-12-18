@@ -63,10 +63,11 @@ public class MapMarkerEditManager implements Listener, AutoCloseable {
 
     private final Map<Player, MapMarkerEditData> activeEditing;
     private final ImageMapRenderEventListener renderEventListener;
-    private final ScheduledTask task;
+    private final Map<Player, ScheduledTask> editTasks;
 
     public MapMarkerEditManager() {
         this.activeEditing = new ConcurrentHashMap<>();
+        this.editTasks = new ConcurrentHashMap<>();
         this.renderEventListener = (manager, imageMap, map, player, renderData) -> {
             Collection<MapCursor> cursors = renderData.getSecond();
             List<MapCursor> additionCursors = new LinkedList<>();
@@ -82,68 +83,81 @@ public class MapMarkerEditManager implements Listener, AutoCloseable {
             }
         };
         ImageFrame.imageMapManager.appendRenderEventListener(renderEventListener);
-        this.task = Scheduler.runTaskTimer(ImageFrame.plugin, () -> editTask(), 0, 1);
         Bukkit.getPluginManager().registerEvents(this, ImageFrame.plugin);
     }
 
     @Override
     public void close() {
         ImageFrame.imageMapManager.removeRenderEventListener(renderEventListener);
-        task.cancel();
+        for (ScheduledTask task : editTasks.values()) {
+            task.cancel();
+        }
+        editTasks.clear();
+        activeEditing.clear();
         HandlerList.unregisterAll(this);
     }
 
-    private void editTask() {
-        for (Map.Entry<Player, MapMarkerEditData> entry : activeEditing.entrySet()) {
-            Player player = entry.getKey();
-            if (!player.isOnline()) {
-                continue;
-            }
-            Location location = player.getEyeLocation();
-            RayTraceResult result = MapUtils.rayTraceItemFrame(location, location.getDirection(), 5.0);
-            if (result == null) {
-                continue;
-            }
-            ItemFrame itemFrame = (ItemFrame) result.getHitEntity();
-            if (itemFrame == null) {
-                continue;
-            }
-            Vector hitPosition = result.getHitPosition();
-            ItemStack itemStack = itemFrame.getItem();
-            if (itemStack == null || itemStack.getType().equals(Material.AIR)) {
-                continue;
-            }
-            if (!itemStack.hasItemMeta()) {
-                continue;
-            }
-            ItemMeta itemMeta = itemStack.getItemMeta();
-            if (!(itemMeta instanceof MapMeta)) {
-                continue;
-            }
-            MapMeta mapMeta = (MapMeta) itemMeta;
-            MapView mapView = mapMeta.getMapView();
-            if (mapView == null) {
-                continue;
-            }
-            MapMarkerEditData editData = entry.getValue();
-            ImageMap imageMap = editData.getImageMap();
-            if (!imageMap.isValid()) {
-                leaveActiveEditing(player);
-                continue;
-            }
-            if (!imageMap.getMapViews().contains(mapView)) {
-                continue;
-            }
-            IntPosition target = MapUtils.getTargetPixelOnItemFrame(itemFrame.getLocation().toVector(), itemFrame.getFacing().getDirection(), hitPosition, itemFrame.getRotation());
-            editData.setCurrentTargetMap(mapView);
-            editData.getMapCursor().setX((byte) target.getX());
-            editData.getMapCursor().setY((byte) target.getY());
-            Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> imageMap.send(imageMap.getViewers()));
+    private void tickEdit(Player player) {
+        if (!player.isOnline()) {
+            leaveActiveEditing(player);
+            return;
         }
+
+        MapMarkerEditData editData = activeEditing.get(player);
+        if (editData == null) {
+            ScheduledTask task = editTasks.remove(player);
+            if (task != null) {
+                task.cancel();
+            }
+            return;
+        }
+
+        ImageMap imageMap = editData.getImageMap();
+        if (!imageMap.isValid()) {
+            leaveActiveEditing(player);
+            return;
+        }
+
+        Location location = player.getEyeLocation();
+        RayTraceResult result = MapUtils.rayTraceItemFrame(location, location.getDirection(), 5.0);
+        if (result == null) {
+            return;
+        }
+        ItemFrame itemFrame = (ItemFrame) result.getHitEntity();
+        if (itemFrame == null) {
+            return;
+        }
+        Vector hitPosition = result.getHitPosition();
+        ItemStack itemStack = itemFrame.getItem();
+        if (itemStack == null || itemStack.getType().equals(Material.AIR)) {
+            return;
+        }
+        if (!itemStack.hasItemMeta()) {
+            return;
+        }
+        ItemMeta itemMeta = itemStack.getItemMeta();
+        if (!(itemMeta instanceof MapMeta)) {
+            return;
+        }
+        MapMeta mapMeta = (MapMeta) itemMeta;
+        MapView mapView = mapMeta.getMapView();
+        if (mapView == null) {
+            return;
+        }
+        if (!imageMap.getMapViews().contains(mapView)) {
+            return;
+        }
+
+        IntPosition target = MapUtils.getTargetPixelOnItemFrame(itemFrame.getLocation().toVector(), itemFrame.getFacing().getDirection(), hitPosition, itemFrame.getRotation());
+        editData.setCurrentTargetMap(mapView);
+        editData.getMapCursor().setX((byte) target.getX());
+        editData.getMapCursor().setY((byte) target.getY());
+        Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> imageMap.send(imageMap.getViewers()));
     }
 
     public void setActiveEditing(Player player, String name, MapCursor mapCursor, ImageMap imageMap) {
         activeEditing.put(player, new MapMarkerEditData(name, mapCursor, imageMap));
+        editTasks.computeIfAbsent(player, p -> Scheduler.runTaskTimer(ImageFrame.plugin, () -> tickEdit(p), 0, 1, p));
     }
 
     public boolean isActiveEditing(Player player) {
@@ -155,6 +169,10 @@ public class MapMarkerEditManager implements Listener, AutoCloseable {
     }
 
     public MapMarkerEditData leaveActiveEditing(Player player) {
+        ScheduledTask task = editTasks.remove(player);
+        if (task != null) {
+            task.cancel();
+        }
         return activeEditing.remove(player);
     }
 

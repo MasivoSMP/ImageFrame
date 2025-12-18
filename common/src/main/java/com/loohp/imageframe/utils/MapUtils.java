@@ -466,7 +466,7 @@ public class MapUtils {
     }
 
     public static Future<Boolean> canViewMap(Player player, MapView mapView) {
-        return Scheduler.callSyncMethod(ImageFrame.plugin, () -> {
+        return FutureUtils.callSyncMethod(() -> {
             if (NMS.getInstance().getViewers(mapView).contains(player)) {
                 return true;
             }
@@ -485,7 +485,7 @@ public class MapUtils {
                 }
             }
             return false;
-        });
+        }, player);
     }
 
 }

@@ -22,6 +22,9 @@ package com.loohp.imageframe;
 
 import com.loohp.imageframe.config.Config;
 import com.loohp.imageframe.debug.Debug;
+import com.loohp.imageframe.gui.GuiListener;
+import com.loohp.imageframe.gui.GuiConfig;
+import com.loohp.imageframe.gui.RenameSessionManager;
 import com.loohp.imageframe.invisibleframe.InvisibleFrameManager;
 import com.loohp.imageframe.language.LanguageManager;
 import com.loohp.imageframe.listeners.Events;
@@ -147,6 +150,9 @@ public class ImageFrame extends JavaPlugin {
     public static ImageMapCreationTaskManager imageMapCreationTaskManager;
     public static ImageUploadManager imageUploadManager;
     public static CustomClientNetworkManager customClientNetworkManager;
+
+    public static RenameSessionManager renameSessionManager;
+    public static GuiConfig guiConfig;
 
     public static boolean isURLAllowed(String link) {
         if (!restrictImageUrlEnabled) {
@@ -280,6 +286,8 @@ public class ImageFrame extends JavaPlugin {
         imageMapCreationTaskManager = new ImageMapCreationTaskManager(ImageFrame.parallelProcessingLimit);
         imageUploadManager = new ImageUploadManager(uploadServiceEnabled, uploadServiceServerAddress, uploadServiceServerPort);
         customClientNetworkManager = new CustomClientNetworkManager(imageFrameClientEnabled);
+        renameSessionManager = new RenameSessionManager();
+        getServer().getPluginManager().registerEvents(new GuiListener(renameSessionManager), this);
 
         if (isPluginEnabled("PlaceholderAPI")) {
             new Placeholders().register();
@@ -383,6 +391,8 @@ public class ImageFrame extends JavaPlugin {
 
         storageType = KeyUtils.imageFrameKey(config.getConfiguration().getString("Storage.Type"));
         storageOptions = config.getConfiguration().getConfigurationSection("Storage.Options").getValues(true).entrySet().stream().collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().toString()));
+
+        guiConfig = GuiConfig.from(config.getConfiguration());
 
         if (updaterTask != null) {
             updaterTask.cancel();

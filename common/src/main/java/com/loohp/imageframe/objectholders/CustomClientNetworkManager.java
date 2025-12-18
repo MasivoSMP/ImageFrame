@@ -126,7 +126,7 @@ public class CustomClientNetworkManager implements PluginMessageListener, Listen
             if (player.isOnline()) {
                 sendAcknowledgement(player);
             }
-        }, 40);
+        }, 40, player);
     }
 
     @EventHandler
@@ -164,7 +164,7 @@ public class CustomClientNetworkManager implements PluginMessageListener, Listen
             for (UUID uuid : players) {
                 Player player = Bukkit.getPlayer(uuid);
                 if (player != null) {
-                    player.sendPluginMessage(ImageFrame.plugin, CLIENTBOUND_HD_UPDATE_SIGNAL, out);
+                    Scheduler.executeOrScheduleSync(ImageFrame.plugin, () -> player.sendPluginMessage(ImageFrame.plugin, CLIENTBOUND_HD_UPDATE_SIGNAL, out), player);
                 }
             }
         });
@@ -250,7 +250,7 @@ public class CustomClientNetworkManager implements PluginMessageListener, Listen
                         for (int i = 1; i < out.size(); i++) {
                             player.sendPluginMessage(ImageFrame.plugin, CLIENTBOUND_HD_IMAGE_MULTIPART_RESPONSE, out.get(i));
                         }
-                    });
+                    }, player);
                     break;
                 }
                 case SERVERBOUND_IMAGEMAP_DETAILS_REQUEST: {
@@ -278,7 +278,7 @@ public class CustomClientNetworkManager implements PluginMessageListener, Listen
                         if (imageMap != null) {
                             imageMap.send(player);
                         }
-                    });
+                    }, player);
                     break;
                 }
             }
@@ -300,6 +300,15 @@ public class CustomClientNetworkManager implements PluginMessageListener, Listen
             T value = handleAsync.get();
             if (syncPredicate.getAsBoolean()) {
                 Scheduler.runTask(ImageFrame.plugin, () -> completeSync.accept(value));
+            }
+        });
+    }
+
+    private static <T> void handle(Supplier<T> handleAsync, BooleanSupplier syncPredicate, Consumer<T> completeSync, Player player) {
+        Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
+            T value = handleAsync.get();
+            if (syncPredicate.getAsBoolean()) {
+                Scheduler.executeOrScheduleSync(ImageFrame.plugin, () -> completeSync.accept(value), player);
             }
         });
     }

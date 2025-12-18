@@ -340,7 +340,7 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                 knownMapIds.put(player, ConcurrentHashMap.newKeySet());
                 pendingKnownMapIds.put(player, ConcurrentHashMap.newKeySet());
             }
-        }, 20);
+        }, 20, player);
     }
 
     @EventHandler

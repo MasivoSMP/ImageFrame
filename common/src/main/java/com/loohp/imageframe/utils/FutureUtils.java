@@ -23,6 +23,8 @@ package com.loohp.imageframe.utils;
 import com.loohp.imageframe.ImageFrame;
 import com.loohp.platformscheduler.Scheduler;
 
+import org.bukkit.entity.Entity;
+
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
@@ -38,6 +40,17 @@ public class FutureUtils {
 
     public static <T> Future<T> callSyncMethod(Callable<T> task) {
         return Scheduler.callSyncMethod(ImageFrame.plugin, task);
+    }
+
+    public static Future<Void> callSyncMethod(Runnable task, Entity entity) {
+        return callSyncMethod(() -> {
+            task.run();
+            return null;
+        }, entity);
+    }
+
+    public static <T> Future<T> callSyncMethod(Callable<T> task, Entity entity) {
+        return Scheduler.callSyncMethod(ImageFrame.plugin, task, entity);
     }
 
     public static <T> Future<T> callAsyncMethod(Callable<T> task) {
