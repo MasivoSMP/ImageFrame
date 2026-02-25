@@ -47,9 +47,16 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
@@ -57,6 +64,7 @@ public class ImageMapManager implements AutoCloseable {
 
     public static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().create();
     public static final int FAKE_MAP_ID_START_RANGE = Integer.MAX_VALUE / 4 * 3;
+    private static final int STARTUP_PROGRESS_LOG_INTERVAL = 250;
 
     private static final AtomicInteger FAKE_MAP_ID_COUNTER = new AtomicInteger(FAKE_MAP_ID_START_RANGE);
 
@@ -112,6 +120,10 @@ public class ImageMapManager implements AutoCloseable {
     }
 
     public synchronized void addMap(ImageMap map) throws Exception {
+        addMap(map, true);
+    }
+
+    public synchronized void addMap(ImageMap map, boolean persistToStorage) throws Exception {
         if (map.getManager() != this) {
             throw new IllegalArgumentException("ImageMap's manager is not set to this");
         }
@@ -127,7 +139,9 @@ public class ImageMapManager implements AutoCloseable {
             deletedMapIds.remove(mapView.getId());
         }
         try {
-            map.save();
+            if (persistToStorage) {
+                map.save();
+            }
             Bukkit.getPluginManager().callEvent(new ImageMapAddedEvent(map));
         } catch (Throwable e) {
             maps.remove(originalImageIndex);
@@ -136,7 +150,9 @@ public class ImageMapManager implements AutoCloseable {
             }
             throw e;
         }
-        saveDeletedMaps();
+        if (persistToStorage) {
+            saveDeletedMaps();
+        }
     }
 
     public boolean hasMap(int imageIndex) {
@@ -218,7 +234,8 @@ public class ImageMapManager implements AutoCloseable {
                     JsonObject json = imageFrameStorage.loadImageMapData(imageIndex);
                     Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
                         try {
-                            addMap(ImageMapLoaders.load(this, json).get());
+                            addMap(ImageMapLoaders.load(this, json).get(), false);
+                            saveDeletedMaps();
                         } catch (Exception e) {
                             throw new RuntimeException("Unable to update map " + imageIndex + " from source", e);
                         }
@@ -268,28 +285,108 @@ public class ImageMapManager implements AutoCloseable {
         maps.clear();
         mapsByView.clear();
         try {
-            List<MutablePair<String, Future<? extends ImageMap>>> futures = imageFrameStorage.loadMaps(this, deletedMapIds, ifPlayerManager);
-            Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
-                int count = 0;
-                try {
-                    for (MutablePair<String, Future<? extends ImageMap>> pair : futures) {
-                        try {
-                            addMap(pair.getSecond().get());
-                            count++;
-                        } catch (Throwable e) {
-                            Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to load ImageMap data in " + pair.getFirst());
-                            e.printStackTrace();
-                        }
+            long overallStart = System.currentTimeMillis();
+            long descriptorStart = System.currentTimeMillis();
+            List<MutablePair<String, JsonObject>> descriptors = imageFrameStorage.loadMaps(this, deletedMapIds, ifPlayerManager);
+            long descriptorTime = System.currentTimeMillis() - descriptorStart;
+
+            int total = descriptors.size();
+            if (total <= 0) {
+                Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[ImageFrame] Data loading completed! Loaded 0 ImageMaps! (descriptor scan " + descriptorTime + "ms)");
+                return;
+            }
+
+            int workerCount = Math.min(total, resolveStartupWarmupThreads());
+            AtomicInteger workerThreadCount = new AtomicInteger(0);
+            ThreadFactory threadFactory = runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("ImageFrame Startup Warmup Thread #" + workerThreadCount.incrementAndGet());
+                thread.setDaemon(true);
+                return thread;
+            };
+            ExecutorService executor = Executors.newFixedThreadPool(workerCount, threadFactory);
+            CompletionService<MutablePair<String, ImageMap>> completionService = new ExecutorCompletionService<>(executor);
+            for (MutablePair<String, JsonObject> descriptor : descriptors) {
+                completionService.submit(() -> {
+                    try {
+                        return new MutablePair<>(descriptor.getFirst(), ImageMapLoaders.load(this, descriptor.getSecond()).get());
+                    } catch (Throwable e) {
+                        throw new RuntimeException("Unable to load ImageMap data in " + descriptor.getFirst(), e);
                     }
-                    Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[ImageFrame] Data loading completed! Loaded " + count + " ImageMaps!");
-                } finally {
-                    loadingCount.decrementAndGet();
+                });
+            }
+
+            int loadedCount = 0;
+            int failedCount = 0;
+            long warmupStart = System.currentTimeMillis();
+            long registrationTimeNanos = 0L;
+            for (int i = 0; i < total; i++) {
+                try {
+                    MutablePair<String, ImageMap> loaded = completionService.take().get();
+                    try {
+                        long registrationStart = System.nanoTime();
+                        addMap(loaded.getSecond(), false);
+                        registrationTimeNanos += System.nanoTime() - registrationStart;
+                        loadedCount++;
+                    } catch (Throwable e) {
+                        failedCount++;
+                        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to register loaded ImageMap during startup warmup");
+                        e.printStackTrace();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                } catch (ExecutionException e) {
+                    failedCount++;
+                    Throwable cause = e.getCause() == null ? e : e.getCause();
+                    Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to load ImageMap during startup warmup");
+                    cause.printStackTrace();
                 }
-            });
+
+                if (loadedCount > 0 && (loadedCount % STARTUP_PROGRESS_LOG_INTERVAL == 0 || loadedCount + failedCount == total)) {
+                    long elapsed = Math.max(1L, System.currentTimeMillis() - warmupStart);
+                    double rate = loadedCount / (elapsed / 1000.0);
+                    int remaining = total - loadedCount - failedCount;
+                    long etaSeconds = rate <= 0.0 ? -1 : Math.round(remaining / rate);
+                    Bukkit.getConsoleSender().sendMessage(ChatColor.GRAY + "[ImageFrame] Startup load progress: " + loadedCount + "/" + total + " loaded, " + failedCount + " failed, ETA " + (etaSeconds < 0 ? "unknown" : etaSeconds + "s"));
+                }
+            }
+
+            executor.shutdown();
+            try {
+                if (!executor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    executor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                executor.shutdownNow();
+            }
+
+            long warmupTime = System.currentTimeMillis() - warmupStart;
+            long totalTime = System.currentTimeMillis() - overallStart;
+            long registrationTime = TimeUnit.NANOSECONDS.toMillis(registrationTimeNanos);
+            PersistentColorCache.CacheStats cacheStats = PersistentColorCache.snapshotAndResetStats();
+            saveDeletedMaps();
+            Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[ImageFrame] Data loading completed! Loaded " + loadedCount + " ImageMaps (" + failedCount + " failed).");
+            Bukkit.getConsoleSender().sendMessage(ChatColor.GRAY + "[ImageFrame] Startup timing: descriptor scan " + descriptorTime + "ms, loader+warmup " + warmupTime + "ms, registration " + registrationTime + "ms, total " + totalTime + "ms.");
+            Bukkit.getConsoleSender().sendMessage(ChatColor.GRAY + "[ImageFrame] Persistent color cache: " + cacheStats.getHits() + " hits, " + cacheStats.getMisses() + " misses, " + cacheStats.getCorruptions() + " corruptions.");
         } catch (Throwable e) {
+            if (e instanceof Error) {
+                throw (Error) e;
+            }
+            throw new RuntimeException("Unable to load ImageMaps during startup", e);
+        } finally {
             loadingCount.decrementAndGet();
-            throw e;
         }
+    }
+
+    private int resolveStartupWarmupThreads() {
+        int configured = ImageFrame.startupCacheWarmupThreads;
+        if (configured > 0) {
+            return configured;
+        }
+        int processors = Runtime.getRuntime().availableProcessors();
+        return Math.min(4, Math.max(1, processors / 2));
     }
 
     public void syncMaps() {

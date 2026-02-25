@@ -118,6 +118,7 @@ public class MinecraftURLOverlayImageMapLoader extends ImageMapLoader<MinecraftU
         int height = json.get("height").getAsInt();
         DitheringType ditheringType = DitheringType.fromName(json.has("ditheringType") ? json.get("ditheringType").getAsString() : null);
         long creationTime = json.get("creationTime").getAsLong();
+        long imageDataRevision = json.has("imageDataRevision") ? json.get("imageDataRevision").getAsLong() : creationTime;
         UUID creator = UUID.fromString(json.get("creator").getAsString());
         Map<UUID, ImageMapAccessPermissionType> hasAccess;
         if (json.has("hasAccess")) {
@@ -130,7 +131,7 @@ public class MinecraftURLOverlayImageMapLoader extends ImageMapLoader<MinecraftU
             hasAccess = Collections.emptyMap();
         }
         JsonArray mapDataJson = json.get("mapdata").getAsJsonArray();
-        List<Future<MapView>> mapViewsFuture = new ArrayList<>(mapDataJson.size());
+        List<Integer> requestedMapIds = new ArrayList<>(mapDataJson.size());
         LazyMappedBufferedImage[] cachedImages = new LazyMappedBufferedImage[mapDataJson.size()];
         List<Map<String, MapCursor>> markers = new ArrayList<>(mapDataJson.size());
         World world = MapUtils.getMainWorld();
@@ -138,10 +139,9 @@ public class MinecraftURLOverlayImageMapLoader extends ImageMapLoader<MinecraftU
         for (JsonElement dataJson : mapDataJson) {
             JsonObject jsonObject = dataJson.getAsJsonObject();
             if (jsonObject.has("mapid")) {
-                int mapId = jsonObject.get("mapid").getAsInt();
-                mapViewsFuture.add(MapUtils.getMapOrCreateMissing(world, mapId));
+                requestedMapIds.add(jsonObject.get("mapid").getAsInt());
             } else {
-                mapViewsFuture.add(MapUtils.createMap(world));
+                requestedMapIds.add(null);
             }
             cachedImages[i] = StandardLazyMappedBufferedImage.fromSource(manager.getStorage().getSource(imageIndex, jsonObject.get("image").getAsString()));
             Map<String, MapCursor> mapCursors = new ConcurrentHashMap<>();
@@ -162,14 +162,10 @@ public class MinecraftURLOverlayImageMapLoader extends ImageMapLoader<MinecraftU
             markers.add(mapCursors);
             i++;
         }
-        List<Integer> mapIds = new ArrayList<>(mapDataJson.size());
-        List<MapView> mapViews = new ArrayList<>(mapViewsFuture.size());
-        for (Future<MapView> future : mapViewsFuture) {
-            MapView mapView = future.get();
-            mapViews.add(mapView);
-            mapIds.add(mapView.getId());
-        }
+        List<MapView> mapViews = FutureUtils.callSyncMethod(() -> MapUtils.resolveMapViewsSync(world, requestedMapIds)).get();
+        List<Integer> mapIds = mapViews.stream().map(MapView::getId).collect(java.util.stream.Collectors.toList());
         MinecraftURLOverlayImageMap map = new MinecraftURLOverlayImageMap(manager, this, imageIndex, name, url, cachedImages, mapViews, mapIds, markers, width, height, ditheringType, creator, hasAccess, creationTime);
+        map.setImageDataRevision(imageDataRevision);
         return FutureUtils.callSyncMethod(() -> {
             for (int u = 0; u < mapViews.size(); u++) {
                 MapView mapView = mapViews.get(u);

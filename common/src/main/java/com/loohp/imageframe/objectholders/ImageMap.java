@@ -80,6 +80,7 @@ public abstract class ImageMap {
     protected UUID creator;
     protected ImageMapAccessControl accessControl;
     protected final long creationTime;
+    protected long imageDataRevision;
 
     protected final ImageMapCacheControlTask cacheControlTask;
     private boolean isValid;
@@ -107,6 +108,7 @@ public abstract class ImageMap {
         this.creator = creator;
         this.accessControl = new ImageMapAccessControl(this, hasAccess);
         this.creationTime = creationTime;
+        this.imageDataRevision = creationTime;
 
         this.cacheControlTask = ImageFrame.cacheControlMode.newInstance(this);
         this.isValid = true;
@@ -131,7 +133,9 @@ public abstract class ImageMap {
         this.name = json.has("name") ? json.get("name").getAsString() : "Unnamed";
         this.creator = UUID.fromString(json.get("creator").getAsString());
         DitheringType previousDitheringType = ditheringType;
+        long previousImageDataRevision = imageDataRevision;
         this.ditheringType = DitheringType.fromName(json.has("ditheringType") ? json.get("ditheringType").getAsString() : null);
+        this.imageDataRevision = json.has("imageDataRevision") ? json.get("imageDataRevision").getAsLong() : creationTime;
 
         if (json.has("hasAccess")) {
             JsonObject accessJson = json.get("hasAccess").getAsJsonObject();
@@ -166,7 +170,7 @@ public abstract class ImageMap {
             markers.putAll(mapCursors);
         }
 
-        return previousDitheringType != ditheringType;
+        return previousDitheringType != ditheringType || previousImageDataRevision != imageDataRevision;
     }
 
     protected abstract void loadColorCache();
@@ -461,6 +465,18 @@ public abstract class ImageMap {
 
     public long getCreationTime() {
         return creationTime;
+    }
+
+    public long getImageDataRevision() {
+        return imageDataRevision;
+    }
+
+    public void setImageDataRevision(long imageDataRevision) {
+        this.imageDataRevision = imageDataRevision;
+    }
+
+    protected void touchImageDataRevision() {
+        this.imageDataRevision = System.currentTimeMillis();
     }
 
     public List<MapView> getMapViews() {
