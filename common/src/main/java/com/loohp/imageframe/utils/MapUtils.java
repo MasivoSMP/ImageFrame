@@ -60,6 +60,7 @@ import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -433,22 +434,25 @@ public class MapUtils {
 
     @SuppressWarnings("DataFlowIssue")
     public static Future<MapView> createMap(World world) {
-        return FutureUtils.callSyncMethod(() -> {
-            int worldNextId = NMS.getInstance().getNextAvailableMapId(world);
-            int ifNextId = ImageFrame.imageMapManager.getMaxMapId() + 1;
-            int candidate = Math.max(worldNextId, ifNextId);
-            AtomicInteger worldDataNextId = getWorldDataNextIdCounter(world);
-            int id;
-            while (true) {
-                int current = worldDataNextId.get();
-                id = Math.max(candidate, current);
-                if (worldDataNextId.compareAndSet(current, id + 1)) {
-                    break;
-                }
+        return FutureUtils.callSyncMethod(() -> createMapSync(world));
+    }
+
+    @SuppressWarnings("DataFlowIssue")
+    public static MapView createMapSync(World world) {
+        int worldNextId = NMS.getInstance().getNextAvailableMapId(world);
+        int ifNextId = ImageFrame.imageMapManager.getMaxMapId() + 1;
+        int candidate = Math.max(worldNextId, ifNextId);
+        AtomicInteger worldDataNextId = getWorldDataNextIdCounter(world);
+        int id;
+        while (true) {
+            int current = worldDataNextId.get();
+            id = Math.max(candidate, current);
+            if (worldDataNextId.compareAndSet(current, id + 1)) {
+                break;
             }
-            tryDeleteBlankDataFile(world, id);
-            return NMS.getInstance().getMapOrCreateMissing(world, id);
-        });
+        }
+        tryDeleteBlankDataFile(world, id);
+        return NMS.getInstance().getMapOrCreateMissing(world, id);
     }
 
     public static Future<MapView> getMap(int id) {
@@ -456,10 +460,24 @@ public class MapUtils {
     }
 
     public static Future<MapView> getMapOrCreateMissing(World world, int id) {
-        return FutureUtils.callSyncMethod(() -> {
-            tryDeleteBlankDataFile(world, id);
-            return NMS.getInstance().getMapOrCreateMissing(world, id);
-        });
+        return FutureUtils.callSyncMethod(() -> getMapOrCreateMissingSync(world, id));
+    }
+
+    public static MapView getMapOrCreateMissingSync(World world, int id) {
+        tryDeleteBlankDataFile(world, id);
+        return NMS.getInstance().getMapOrCreateMissing(world, id);
+    }
+
+    public static List<MapView> resolveMapViewsSync(World world, List<Integer> mapIds) {
+        List<MapView> mapViews = new ArrayList<>(mapIds.size());
+        for (Integer mapId : mapIds) {
+            if (mapId == null) {
+                mapViews.add(createMapSync(world));
+            } else {
+                mapViews.add(getMapOrCreateMissingSync(world, mapId));
+            }
+        }
+        return mapViews;
     }
 
     public static MutablePair<byte[], List<MapCursor>> bukkitRenderMap(MapView mapView, Player player) {

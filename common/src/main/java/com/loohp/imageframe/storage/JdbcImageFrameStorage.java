@@ -29,7 +29,6 @@ import com.loohp.imageframe.ImageFrame;
 import com.loohp.imageframe.objectholders.IFPlayer;
 import com.loohp.imageframe.objectholders.IFPlayerManager;
 import com.loohp.imageframe.objectholders.ImageMap;
-import com.loohp.imageframe.objectholders.ImageMapLoaders;
 import com.loohp.imageframe.objectholders.ImageMapManager;
 import com.loohp.imageframe.objectholders.LazyDataSource;
 import com.loohp.imageframe.objectholders.MutablePair;
@@ -67,7 +66,6 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.UUID;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.IntConsumer;
 import java.util.stream.Collectors;
@@ -395,8 +393,8 @@ public class JdbcImageFrameStorage implements ImageFrameStorage {
     }
 
     @Override
-    public List<MutablePair<String, Future<? extends ImageMap>>> loadMaps(ImageMapManager imageMapManager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager) {
-        List<MutablePair<String, Future<? extends ImageMap>>> futures = new ArrayList<>();
+    public List<MutablePair<String, JsonObject>> loadMaps(ImageMapManager imageMapManager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager) {
+        List<MutablePair<String, JsonObject>> maps = new ArrayList<>();
 
         String sqlMaps = "SELECT BASE.IMAGE_INDEX AS IMAGE_INDEX, BASE.DATA AS BASE_DATA, INST.DATA AS INST_DATA FROM IMAGE_MAPS BASE LEFT JOIN INSTANCE_IMAGE_MAP_DATA INST ON INST.IMAGE_INDEX = BASE.IMAGE_INDEX AND INST.INSTANCE_ID = ? ORDER BY BASE.IMAGE_INDEX ASC";
         try (
@@ -417,8 +415,7 @@ public class JdbcImageFrameStorage implements ImageFrameStorage {
 
                     JsonObject mergedJson = JsonUtils.merge(baseJson, instanceJson).getAsJsonObject();
 
-                    Future<? extends ImageMap> future = ImageMapLoaders.load(imageMapManager, mergedJson);
-                    futures.add(new MutablePair<>("database:" + imageIndex, future));
+                    maps.add(new MutablePair<>("database:" + imageIndex, mergedJson));
                 }
             }
         } catch (Exception e) {
@@ -430,7 +427,7 @@ public class JdbcImageFrameStorage implements ImageFrameStorage {
 
         setupTasks(imageMapManager, ifPlayerManager);
 
-        return futures;
+        return maps;
     }
 
     public void activeUpdate(ImageMapManager imageMapManager, IFPlayerManager ifPlayerManager) {

@@ -59,6 +59,12 @@ Settings:
   #Changing this option requires a restart
   HandleAnimatedMapsOnMainThread: false
   SendAnimatedMapsOnMainThread: false
+  Startup:
+    #How many worker threads should be used for startup map loading and cache warmup.
+    #Set to 0 to auto-detect (min(4, max(1, cpu/2))).
+    CacheWarmupThreads: 0
+    #Persist computed map color caches to storage to speed up restarts.
+    PersistentColorCache: true
   #Valid modes are "DYNAMIC" and "MANUAL_PERSISTENT"
   #DYNAMIC: load and unload image cache depending on whether a player is viewing
   #May use more CPU and image might appear with a slight delay

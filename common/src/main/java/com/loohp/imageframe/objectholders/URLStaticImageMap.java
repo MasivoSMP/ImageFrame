@@ -68,6 +68,11 @@ public class URLStaticImageMap extends URLImageMap {
         if (cachedImages[0] == null) {
             return;
         }
+        byte[][] persistentCache = PersistentColorCache.loadStatic(this, loader.getIdentifier().asString(), width, height, cachedImages.length, ditheringType, imageDataRevision);
+        if (persistentCache != null) {
+            this.cachedColors = persistentCache;
+            return;
+        }
         byte[][] cachedColors = new byte[cachedImages.length][];
         BufferedImage combined = new BufferedImage(width * MapUtils.MAP_WIDTH, height * MapUtils.MAP_WIDTH, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = combined.createGraphics();
@@ -87,6 +92,7 @@ public class URLStaticImageMap extends URLImageMap {
             cachedColors[i] = data;
         }
         this.cachedColors = cachedColors;
+        PersistentColorCache.saveStatic(this, loader.getIdentifier().asString(), width, height, cachedImages.length, ditheringType, imageDataRevision, cachedColors);
     }
 
     @Override
@@ -126,6 +132,7 @@ public class URLStaticImageMap extends URLImageMap {
             }
         }
         reloadColorCache();
+        touchImageDataRevision();
         Bukkit.getPluginManager().callEvent(new ImageMapUpdatedEvent(this));
         send(getViewers());
         if (save) {
@@ -148,6 +155,7 @@ public class URLStaticImageMap extends URLImageMap {
         if (ditheringType != null) {
             json.addProperty("ditheringType", ditheringType.getName());
         }
+        json.addProperty("imageDataRevision", imageDataRevision);
         json.addProperty("creator", creator.toString());
         JsonObject accessJson = new JsonObject();
         for (Map.Entry<UUID, ImageMapAccessPermissionType> entry : accessControl.getPermissions().entrySet()) {
@@ -187,6 +195,9 @@ public class URLStaticImageMap extends URLImageMap {
             }
         }
         storage.saveImageMapData(imageIndex, json);
+        if (cachedColors != null) {
+            PersistentColorCache.saveStatic(this, loader.getIdentifier().asString(), width, height, cachedImages.length, ditheringType, imageDataRevision, cachedColors);
+        }
     }
 
     public static class URLStaticImageMapRenderer extends ImageMapRenderer {

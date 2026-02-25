@@ -113,6 +113,8 @@ public class ImageFrame extends JavaPlugin {
     public static boolean mapRenderersContextual;
     public static boolean handleAnimatedMapsOnMainThread;
     public static boolean sendAnimatedMapsOnMainThread;
+    public static int startupCacheWarmupThreads;
+    public static boolean startupPersistentColorCache;
 
     public static ImageMapCacheControlMode<?> cacheControlMode;
     public static boolean tryDeleteBlankMapFiles;
@@ -367,6 +369,8 @@ public class ImageFrame extends JavaPlugin {
         mapRenderersContextual = config.getConfiguration().getBoolean("Settings.MapRenderersContextual");
         handleAnimatedMapsOnMainThread = config.getConfiguration().getBoolean("Settings.HandleAnimatedMapsOnMainThread");
         sendAnimatedMapsOnMainThread = config.getConfiguration().getBoolean("Settings.SendAnimatedMapsOnMainThread");
+        startupCacheWarmupThreads = config.getConfiguration().getInt("Settings.Startup.CacheWarmupThreads", 0);
+        startupPersistentColorCache = config.getConfiguration().getBoolean("Settings.Startup.PersistentColorCache", true);
 
         cacheControlMode = ImageMapCacheControlMode.valueOf(config.getConfiguration().getString("Settings.CacheControlMode"));
         tryDeleteBlankMapFiles = config.getConfiguration().getBoolean("Settings.TryDeleteBlankMapFiles");

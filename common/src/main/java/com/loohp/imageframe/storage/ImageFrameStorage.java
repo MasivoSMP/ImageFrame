@@ -31,7 +31,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Future;
 import java.util.function.IntConsumer;
 
 public interface ImageFrameStorage extends AutoCloseable {
@@ -52,7 +51,7 @@ public interface ImageFrameStorage extends AutoCloseable {
 
     void deleteMap(int imageIndex);
 
-    List<MutablePair<String, Future<? extends ImageMap>>> loadMaps(ImageMapManager manager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager);
+    List<MutablePair<String, JsonObject>> loadMaps(ImageMapManager manager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager);
 
     void saveImageMapData(int imageIndex, JsonObject json) throws IOException;
 

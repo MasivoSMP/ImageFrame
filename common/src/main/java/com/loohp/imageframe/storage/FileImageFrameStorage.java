@@ -26,7 +26,6 @@ import com.google.gson.JsonObject;
 import com.loohp.imageframe.objectholders.IFPlayer;
 import com.loohp.imageframe.objectholders.IFPlayerManager;
 import com.loohp.imageframe.objectholders.ImageMap;
-import com.loohp.imageframe.objectholders.ImageMapLoaders;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.loohp.imageframe.objectholders.ImageMapManager;
@@ -57,7 +56,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
@@ -175,17 +173,17 @@ public class FileImageFrameStorage implements ImageFrameStorage {
     }
 
     @Override
-    public List<MutablePair<String, Future<? extends ImageMap>>> loadMaps(ImageMapManager manager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager) {
+    public List<MutablePair<String, JsonObject>> loadMaps(ImageMapManager manager, Set<Integer> deletedMapIds, IFPlayerManager ifPlayerManager) {
         imageMapFolder.mkdirs();
         File[] files = imageMapFolder.listFiles();
         Arrays.sort(files, FileUtils.BY_NUMBER_THEN_STRING);
-        List<MutablePair<String, Future<? extends ImageMap>>> futures = new LinkedList<>();
+        List<MutablePair<String, JsonObject>> maps = new LinkedList<>();
         for (File file : files) {
             if (file.isDirectory()) {
                 try {
                     int imageIndex = Integer.parseInt(file.getName());
                     JsonObject json = loadImageMapData(imageIndex);
-                    futures.add(new MutablePair<>(file.getAbsolutePath(), ImageMapLoaders.load(manager, json)));
+                    maps.add(new MutablePair<>(file.getAbsolutePath(), json));
                 } catch (Throwable e) {
                     Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to load ImageMap data in " + file.getAbsolutePath());
                     e.printStackTrace();
@@ -211,7 +209,7 @@ public class FileImageFrameStorage implements ImageFrameStorage {
                 }
             }
         }
-        return futures;
+        return maps;
     }
 
     @Override

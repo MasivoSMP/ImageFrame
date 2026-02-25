@@ -69,6 +69,16 @@ public class URLAnimatedImageMap extends URLImageMap {
         if (cachedImages[0] == null) {
             return;
         }
+        int[] frameCounts = new int[cachedImages.length];
+        for (int i = 0; i < cachedImages.length; i++) {
+            LazyMappedBufferedImage[] images = cachedImages[i];
+            frameCounts[i] = images == null ? 0 : images.length;
+        }
+        byte[][][] persistentCache = PersistentColorCache.loadAnimated(this, loader.getIdentifier().asString(), width, height, cachedImages.length, frameCounts, ditheringType, imageDataRevision);
+        if (persistentCache != null) {
+            applyCachedAnimationColors(persistentCache);
+            return;
+        }
         byte[][][] cachedColors = new byte[cachedImages.length][][];
         int[][] fakeMapIds = new int[cachedColors.length][];
         Set<Integer> fakeMapIdsSet = new HashSet<>();
@@ -116,6 +126,28 @@ public class URLAnimatedImageMap extends URLImageMap {
             cachedColors[i] = data;
             fakeMapIds[i] = mapIds;
             i++;
+        }
+        this.cachedColors = cachedColors;
+        this.fakeMapIds = fakeMapIds;
+        this.fakeMapIdsSet = fakeMapIdsSet;
+        PersistentColorCache.saveAnimated(this, loader.getIdentifier().asString(), width, height, cachedImages.length, frameCounts, ditheringType, imageDataRevision, cachedColors);
+    }
+
+    private void applyCachedAnimationColors(byte[][][] cachedColors) {
+        int[][] fakeMapIds = new int[cachedColors.length][];
+        Set<Integer> fakeMapIdsSet = new HashSet<>();
+        for (int i = 0; i < cachedColors.length; i++) {
+            byte[][] frames = cachedColors[i];
+            int[] mapIds = new int[frames.length];
+            Arrays.fill(mapIds, -1);
+            for (int u = 0; u < frames.length; u++) {
+                if (frames[u] != null) {
+                    int mapId = ImageMapManager.getNextFakeMapId();
+                    mapIds[u] = mapId;
+                    fakeMapIdsSet.add(mapId);
+                }
+            }
+            fakeMapIds[i] = mapIds;
         }
         this.cachedColors = cachedColors;
         this.fakeMapIds = fakeMapIds;
@@ -168,6 +200,7 @@ public class URLAnimatedImageMap extends URLImageMap {
             index++;
         }
         reloadColorCache();
+        touchImageDataRevision();
         Bukkit.getPluginManager().callEvent(new ImageMapUpdatedEvent(this));
         if (save) {
             save();
@@ -343,6 +376,7 @@ public class URLAnimatedImageMap extends URLImageMap {
         if (ditheringType != null) {
             json.addProperty("ditheringType", ditheringType.getName());
         }
+        json.addProperty("imageDataRevision", imageDataRevision);
         json.addProperty("creator", creator.toString());
         json.addProperty("pausedAt", pausedAt);
         json.addProperty("tickOffset", tickOffset);
@@ -395,6 +429,13 @@ public class URLAnimatedImageMap extends URLImageMap {
         }
         json.add("mapdata", mapDataJson);
         storage.saveImageMapData(imageIndex, json);
+        if (cachedColors != null) {
+            int[] frameCounts = new int[cachedImages.length];
+            for (int i = 0; i < cachedImages.length; i++) {
+                frameCounts[i] = cachedImages[i] == null ? 0 : cachedImages[i].length;
+            }
+            PersistentColorCache.saveAnimated(this, loader.getIdentifier().asString(), width, height, cachedImages.length, frameCounts, ditheringType, imageDataRevision, cachedColors);
+        }
     }
 
     public static class URLAnimatedImageMapRenderer extends ImageMapRenderer {
