@@ -50,13 +50,11 @@ import com.loohp.imageframe.objectholders.UnsetState;
 import com.loohp.imageframe.placeholderapi.Placeholders;
 import com.loohp.imageframe.storage.ImageFrameStorage;
 import com.loohp.imageframe.storage.ImageFrameStorageLoaders;
-import com.loohp.imageframe.updater.Updater;
 import com.loohp.imageframe.upload.ImageUploadManager;
 import com.loohp.imageframe.utils.ChatColorUtils;
 import com.loohp.imageframe.utils.KeyUtils;
 import com.loohp.imageframe.utils.MCVersion;
 import com.loohp.imageframe.utils.ModernEventsUtils;
-import com.loohp.platformscheduler.ScheduledTask;
 import com.loohp.platformscheduler.Scheduler;
 import com.twelvemonkeys.imageio.plugins.webp.WebPImageReaderSpi;
 import net.kyori.adventure.key.Key;
@@ -92,9 +90,6 @@ public class ImageFrame extends JavaPlugin {
 
     public static boolean viaHook = false;
     public static boolean viaDisableSmoothAnimationForLegacyPlayers = false;
-
-    public static boolean updaterEnabled;
-    public static ScheduledTask updaterTask = null;
 
     public static String language;
 
@@ -267,7 +262,6 @@ public class ImageFrame extends JavaPlugin {
         }
 
         getServer().getPluginManager().registerEvents(new Debug(), this);
-        getServer().getPluginManager().registerEvents(new Updater(), this);
         getServer().getPluginManager().registerEvents(new Events(), this);
         if (ModernEventsUtils.modernEventsExists()) {
             getServer().getPluginManager().registerEvents(new Events.ModernEvents(), this);
@@ -393,14 +387,6 @@ public class ImageFrame extends JavaPlugin {
         storageOptions = config.getConfiguration().getConfigurationSection("Storage.Options").getValues(true).entrySet().stream().collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().toString()));
 
         guiConfig = GuiConfig.from(config.getConfiguration());
-
-        if (updaterTask != null) {
-            updaterTask.cancel();
-        }
-        updaterEnabled = config.getConfiguration().getBoolean("Updater");
-        if (updaterEnabled) {
-            Bukkit.getPluginManager().registerEvents(new Updater(), this);
-        }
     }
 
 }

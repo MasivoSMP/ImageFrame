@@ -47,7 +47,6 @@ import com.loohp.imageframe.storage.ImageFrameStorage;
 import com.loohp.imageframe.storage.ImageFrameStorageLoader;
 import com.loohp.imageframe.storage.ImageFrameStorageLoaders;
 import com.loohp.imageframe.storage.StorageMigrator;
-import com.loohp.imageframe.updater.Updater;
 import com.loohp.imageframe.upload.ImageUploadManager;
 import com.loohp.imageframe.upload.PendingUpload;
 import com.loohp.imageframe.utils.ChatColorUtils;
@@ -141,18 +140,7 @@ public class Commands implements CommandExecutor, TabCompleter {
             if (sender.hasPermission("imageframe.update")) {
                 sendMessage(sender, ChatColor.DARK_AQUA + "[ImageFrame] ImageFrame written by LOOHP!");
                 sendMessage(sender, ChatColor.GOLD + "[ImageFrame] You are running ImageFrame version: " + ImageFrame.plugin.getDescription().getVersion());
-                Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
-                    Updater.UpdaterResponse version = Updater.checkUpdate();
-                    if (version.getResult().equals("latest")) {
-                        if (version.isDevBuildLatest()) {
-                            sendMessage(sender, ChatColor.GREEN + "[ImageFrame] You are running the latest version!");
-                        } else {
-                            Updater.sendUpdateMessage(sender, version.getResult(), version.getSpigotPluginId(), true);
-                        }
-                    } else {
-                        Updater.sendUpdateMessage(sender, version.getResult(), version.getSpigotPluginId());
-                    }
-                });
+                sendMessage(sender, ChatColor.GREEN + "[ImageFrame] Online update checking is disabled in this build.");
             } else {
                 sendMessage(sender, translatable(NO_PERMISSION).color(NamedTextColor.RED));
             }
