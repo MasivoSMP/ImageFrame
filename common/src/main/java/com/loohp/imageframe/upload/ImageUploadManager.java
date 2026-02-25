@@ -46,6 +46,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.Executors;
@@ -217,19 +218,21 @@ public class ImageUploadManager implements AutoCloseable {
                 }
 
                 SizeLimitedByteArrayOutputStream output = new SizeLimitedByteArrayOutputStream(ImageFrame.maxImageFileSize);
+                String uploadedContentType = null;
+                String uploadedFilename = null;
+                boolean foundImagePart = false;
 
                 try (InputStream inputStream = exchange.getRequestBody()) {
                     MultipartStream multipartStream = new MultipartStream(inputStream, boundary, 2048, null);
                     boolean nextPart = multipartStream.skipPreamble();
                     while (nextPart) {
-                        List<String> headers = Arrays.asList(multipartStream.readHeaders().split(";"));
-                        String name = headers.stream()
-                                .map(s -> s.trim()).filter(s -> s.startsWith("name="))
-                                .findFirst()
-                                .map(s -> s.substring("name=".length()))
-                                .orElse(null);
-                        if ("image".equals(name) || "\"image\"".equals(name)) {
+                        String rawHeaders = multipartStream.readHeaders();
+                        String name = extractHeaderParameter(rawHeaders, "name");
+                        if ("image".equals(name)) {
+                            uploadedContentType = extractPartContentType(rawHeaders);
+                            uploadedFilename = extractHeaderParameter(rawHeaders, "filename");
                             multipartStream.readBodyData(output);
+                            foundImagePart = true;
                             break;
                         } else {
                             multipartStream.discardBodyData();
@@ -237,7 +240,20 @@ public class ImageUploadManager implements AutoCloseable {
                         }
                     }
                 }
+                if (!foundImagePart) {
+                    sendResponse(exchange, 400, "{\"error\":\"Missing image field\"}");
+                    return;
+                }
                 byte[] fileData = output.toByteArray();
+                if (fileData.length == 0) {
+                    sendResponse(exchange, 400, "{\"error\":\"Uploaded file is empty\"}");
+                    return;
+                }
+                String extension = resolveImageExtension(uploadedContentType, uploadedFilename, fileData);
+                if (extension == null) {
+                    sendResponse(exchange, 400, "{\"error\":\"Unsupported image format\"}");
+                    return;
+                }
 
                 // Ensure upload directory exists
                 if (!uploadDir.exists()) {
@@ -245,7 +261,7 @@ public class ImageUploadManager implements AutoCloseable {
                 }
 
                 // Save the file with UUID as the filename
-                File outputFile = new File(uploadDir, id + ".png");
+                File outputFile = new File(uploadDir, id + extension);
                 Files.write(outputFile.toPath(), fileData);
                 imagesUploadedCounter.incrementAndGet();
 
@@ -293,6 +309,133 @@ public class ImageUploadManager implements AutoCloseable {
             exchange.sendResponseHeaders(statusCode, message.length());
             exchange.getResponseBody().write(message.getBytes());
             exchange.getResponseBody().close();
+        }
+
+        private String extractPartContentType(String rawHeaders) {
+            for (String headerLine : rawHeaders.split("\\r?\\n")) {
+                int colonIndex = headerLine.indexOf(':');
+                if (colonIndex <= 0) {
+                    continue;
+                }
+                String headerName = headerLine.substring(0, colonIndex).trim();
+                if ("content-type".equalsIgnoreCase(headerName)) {
+                    return headerLine.substring(colonIndex + 1).trim();
+                }
+            }
+            return null;
+        }
+
+        private String extractHeaderParameter(String rawHeaders, String parameterName) {
+            for (String headerLine : rawHeaders.split("\\r?\\n")) {
+                int colonIndex = headerLine.indexOf(':');
+                if (colonIndex <= 0) {
+                    continue;
+                }
+                String headerName = headerLine.substring(0, colonIndex).trim();
+                if (!"content-disposition".equalsIgnoreCase(headerName)) {
+                    continue;
+                }
+                String[] values = headerLine.substring(colonIndex + 1).split(";");
+                for (String value : values) {
+                    String part = value.trim();
+                    int equalsIndex = part.indexOf('=');
+                    if (equalsIndex <= 0) {
+                        continue;
+                    }
+                    String key = part.substring(0, equalsIndex).trim();
+                    if (!parameterName.equalsIgnoreCase(key)) {
+                        continue;
+                    }
+                    String raw = part.substring(equalsIndex + 1).trim();
+                    return stripSurroundingQuotes(raw);
+                }
+            }
+            return null;
+        }
+
+        private String stripSurroundingQuotes(String value) {
+            if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+                return value.substring(1, value.length() - 1);
+            }
+            return value;
+        }
+
+        private String resolveImageExtension(String uploadedContentType, String uploadedFilename, byte[] fileData) {
+            String fromType = extensionFromMimeType(uploadedContentType);
+            if (fromType != null) {
+                return fromType;
+            }
+
+            String fromName = extensionFromFilename(uploadedFilename);
+            if (fromName != null) {
+                return fromName;
+            }
+
+            return extensionFromMagic(fileData);
+        }
+
+        private String extensionFromMimeType(String uploadedContentType) {
+            if (uploadedContentType == null) {
+                return null;
+            }
+            String contentType = uploadedContentType.trim().toLowerCase(Locale.ROOT);
+            if ("image/gif".equals(contentType)) {
+                return ".gif";
+            }
+            if ("image/png".equals(contentType)) {
+                return ".png";
+            }
+            if ("image/jpeg".equals(contentType) || "image/jpg".equals(contentType)) {
+                return ".jpg";
+            }
+            if ("image/webp".equals(contentType)) {
+                return ".webp";
+            }
+            return null;
+        }
+
+        private String extensionFromFilename(String uploadedFilename) {
+            if (uploadedFilename == null) {
+                return null;
+            }
+            String filename = uploadedFilename.trim().toLowerCase(Locale.ROOT);
+            if (filename.endsWith(".gif")) {
+                return ".gif";
+            }
+            if (filename.endsWith(".png")) {
+                return ".png";
+            }
+            if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) {
+                return ".jpg";
+            }
+            if (filename.endsWith(".webp")) {
+                return ".webp";
+            }
+            return null;
+        }
+
+        private String extensionFromMagic(byte[] fileData) {
+            if (fileData.length >= 6) {
+                if (fileData[0] == 'G' && fileData[1] == 'I' && fileData[2] == 'F' && fileData[3] == '8' && (fileData[4] == '7' || fileData[4] == '9') && fileData[5] == 'a') {
+                    return ".gif";
+                }
+            }
+            if (fileData.length >= 8) {
+                if ((fileData[0] & 0xFF) == 0x89 && fileData[1] == 'P' && fileData[2] == 'N' && fileData[3] == 'G' && (fileData[4] & 0xFF) == 0x0D && (fileData[5] & 0xFF) == 0x0A && (fileData[6] & 0xFF) == 0x1A && (fileData[7] & 0xFF) == 0x0A) {
+                    return ".png";
+                }
+            }
+            if (fileData.length >= 3) {
+                if ((fileData[0] & 0xFF) == 0xFF && (fileData[1] & 0xFF) == 0xD8 && (fileData[2] & 0xFF) == 0xFF) {
+                    return ".jpg";
+                }
+            }
+            if (fileData.length >= 12) {
+                if (fileData[0] == 'R' && fileData[1] == 'I' && fileData[2] == 'F' && fileData[3] == 'F' && fileData[8] == 'W' && fileData[9] == 'E' && fileData[10] == 'B' && fileData[11] == 'P') {
+                    return ".webp";
+                }
+            }
+            return null;
         }
     }
 

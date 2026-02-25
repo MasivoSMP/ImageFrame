@@ -109,6 +109,7 @@ buildNumber.properties
 .mvn/timing.properties
 .mvn/wrapper/maven-wrapper.jar
 .flattened-pom.xml
+server_plugin_example
 
 # Common working directory
 run/
