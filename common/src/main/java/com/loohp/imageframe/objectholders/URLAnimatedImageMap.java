@@ -20,30 +20,44 @@
 
 package com.loohp.imageframe.objectholders;
 
+import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import com.loohp.imageframe.ImageFrame;
 import com.loohp.imageframe.api.events.ImageMapUpdatedEvent;
 import com.loohp.imageframe.media.TimedMediaFrameIterator;
 import com.loohp.imageframe.storage.ImageFrameStorage;
-import com.loohp.imageframe.utils.CollectionUtils;
 import com.loohp.imageframe.utils.MapUtils;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.map.MapCursor;
 import org.bukkit.map.MapView;
 
+import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 
 public class URLAnimatedImageMap extends URLImageMap {
+
+    private static final long FNV1A_64_OFFSET = 0xcbf29ce484222325L;
+    private static final long FNV1A_64_PRIME = 0x100000001b3L;
 
     protected final LazyMappedBufferedImage[][] cachedImages;
 
@@ -79,37 +93,45 @@ public class URLAnimatedImageMap extends URLImageMap {
             applyCachedAnimationColors(persistentCache);
             return;
         }
+        int frameCount = cachedImages[0].length;
         byte[][][] cachedColors = new byte[cachedImages.length][][];
         int[][] fakeMapIds = new int[cachedColors.length][];
         Set<Integer> fakeMapIdsSet = new HashSet<>();
-        BufferedImage[] combined = new BufferedImage[cachedImages[0].length];
-        for (int i = 0; i < combined.length; i++) {
-            combined[i] = new BufferedImage(width * MapUtils.MAP_WIDTH, height * MapUtils.MAP_WIDTH, BufferedImage.TYPE_INT_ARGB);
-        }
-        Graphics2D[] g = Arrays.stream(combined).map(i -> i.createGraphics()).toArray(Graphics2D[]::new);
-        int index = 0;
-        for (LazyMappedBufferedImage[] images : cachedImages) {
-            int f = 0;
-            for (LazyMappedBufferedImage image : images) {
-                //noinspection SuspiciousNameCombination
-                g[f++].drawImage(image.get(), (index % width) * MapUtils.MAP_WIDTH, (index / width) * MapUtils.MAP_WIDTH, MapUtils.MAP_WIDTH, MapUtils.MAP_WIDTH, null);
+        byte[][] combinedData = new byte[frameCount][];
+
+        BufferedImage combinedImage = new BufferedImage(width * MapUtils.MAP_WIDTH, height * MapUtils.MAP_WIDTH, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = combinedImage.createGraphics();
+        try {
+            for (int frame = 0; frame < frameCount; frame++) {
+                ensureNotInterrupted();
+                if (frame > 0 && isFrameStateIdentical(frame, frame - 1)) {
+                    combinedData[frame] = combinedData[frame - 1];
+                    continue;
+                }
+                int index = 0;
+                for (LazyMappedBufferedImage[] images : cachedImages) {
+                    //noinspection SuspiciousNameCombination
+                    g.drawImage(images[frame].get(), (index % width) * MapUtils.MAP_WIDTH, (index / width) * MapUtils.MAP_WIDTH, MapUtils.MAP_WIDTH, MapUtils.MAP_WIDTH, null);
+                    index++;
+                }
+                combinedData[frame] = MapUtils.toMapPaletteBytes(combinedImage, ditheringType);
             }
-            index++;
+        } finally {
+            g.dispose();
         }
-        for (Graphics2D g2 : g) {
-            g2.dispose();
-        }
-        byte[][] combinedData = new byte[combined.length][];
-        for (int i = 0; i < combined.length; i++) {
-            combinedData[i] = MapUtils.toMapPaletteBytes(combined[i], ditheringType);
-        }
-        int i = 0;
-        for (LazyMappedBufferedImage[] images : cachedImages) {
+
+        for (int i = 0; i < cachedImages.length; i++) {
+            LazyMappedBufferedImage[] images = cachedImages[i];
             byte[][] data = new byte[images.length][];
             int[] mapIds = new int[data.length];
             Arrays.fill(mapIds, -1);
             byte[] lastDistinctFrame = null;
-            for (int u = 0; u < images.length; u++) {
+            int mapFrameCount = Math.min(images.length, combinedData.length);
+            for (int u = 0; u < mapFrameCount; u++) {
+                ensureNotInterrupted();
+                if (u > 0 && combinedData[u] == combinedData[u - 1]) {
+                    continue;
+                }
                 byte[] b = new byte[MapUtils.MAP_WIDTH * MapUtils.MAP_WIDTH];
                 for (int y = 0; y < MapUtils.MAP_WIDTH; y++) {
                     int offset = ((i / width) * MapUtils.MAP_WIDTH + y) * (width * MapUtils.MAP_WIDTH) + ((i % width) * MapUtils.MAP_WIDTH);
@@ -125,7 +147,6 @@ public class URLAnimatedImageMap extends URLImageMap {
             }
             cachedColors[i] = data;
             fakeMapIds[i] = mapIds;
-            i++;
         }
         this.cachedColors = cachedColors;
         this.fakeMapIds = fakeMapIds;
@@ -173,31 +194,40 @@ public class URLAnimatedImageMap extends URLImageMap {
 
     @Override
     public void update(boolean save) throws Exception {
-        List<BufferedImage> images = CollectionUtils.toList(new TimedMediaFrameIterator(loader.tryLoadMedia(url), 50));
-        for (int i = 0; i < cachedImages.length; i++) {
-            cachedImages[i] = new LazyMappedBufferedImage[images.size()];
+        List<FrameRun> frameRuns = collectFrameRuns(new TimedMediaFrameIterator(loader.tryLoadMedia(url), 50));
+        if (frameRuns.isEmpty()) {
+            throw new IllegalArgumentException("No image frames found");
         }
-        int index = 0;
-        Map<IntPosition, LazyMappedBufferedImage> previousImages = new HashMap<>();
-        for (BufferedImage image : images) {
-            image = MapUtils.resize(image, width, height);
+        int totalTicks = 0;
+        for (FrameRun frameRun : frameRuns) {
+            totalTicks += frameRun.getTicks();
+        }
+        for (int i = 0; i < cachedImages.length; i++) {
+            cachedImages[i] = new LazyMappedBufferedImage[totalTicks];
+        }
+        int tickIndex = 0;
+        Map<IntPosition, TileState> previousImages = new HashMap<>();
+        for (FrameRun frameRun : frameRuns) {
+            ensureNotInterrupted();
+            BufferedImage image = MapUtils.resize(frameRun.getImage(), width, height);
             int i = 0;
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
                     IntPosition intPosition = new IntPosition(x, y);
                     BufferedImage subImage = MapUtils.getSubImage(image, x, y);
-                    LazyMappedBufferedImage previousFile = previousImages.get(intPosition);
+                    long hash = hashImage(subImage);
+                    TileState previousFile = previousImages.get(intPosition);
                     LazyMappedBufferedImage file;
-                    if (previousFile == null || !MapUtils.areImagesEqual(subImage, previousFile.getIfLoaded())) {
-                        file = StandardLazyMappedBufferedImage.fromImage(subImage);
+                    if (previousFile != null && previousFile.getHash() == hash && areImagesEqual(subImage, previousFile.getImage())) {
+                        file = previousFile.getImage();
                     } else {
-                        file = previousFile;
+                        file = StandardLazyMappedBufferedImage.fromImage(copyImage(subImage));
                     }
-                    cachedImages[i++][index] = file;
-                    previousImages.put(intPosition, file);
+                    Arrays.fill(cachedImages[i++], tickIndex, tickIndex + frameRun.getTicks(), file);
+                    previousImages.put(intPosition, new TileState(hash, file));
                 }
             }
-            index++;
+            tickIndex += frameRun.getTicks();
         }
         touchImageDataRevision();
         reloadColorCache();
@@ -387,6 +417,7 @@ public class URLAnimatedImageMap extends URLImageMap {
         json.add("hasAccess", accessJson);
         json.addProperty("creationTime", creationTime);
         JsonArray mapDataJson = new JsonArray();
+        IdentityHashMap<LazyMappedBufferedImage, PendingImageSave> pendingSourceWrites = new IdentityHashMap<>();
         int u = 0;
         for (int i = 0; i < mapViews.size(); i++) {
             JsonObject dataJson = new JsonObject();
@@ -395,19 +426,29 @@ public class URLAnimatedImageMap extends URLImageMap {
             for (LazyMappedBufferedImage image : cachedImages[i]) {
                 int index = u++;
                 LazyDataSource source = storage.getSource(imageIndex, index + ".png");
-                if (image.canSetSource(source)) {
-                    if (saveAsCopy) {
+                if (saveAsCopy) {
+                    if (image.canSetSource(source)) {
                         image.saveCopy(source);
+                        framesArray.add(index + ".png");
                     } else {
-                        image.setSource(source);
-                    }
-                    framesArray.add(index + ".png");
-                } else {
-                    String fileName = image.getSource().getFileName();
-                    if (saveAsCopy) {
+                        String fileName = image.getSource().getFileName();
                         image.saveCopy(source.withFileName(fileName));
+                        framesArray.add(fileName);
                     }
-                    framesArray.add(fileName);
+                    continue;
+                }
+
+                LazyDataSource existingSource = image.getSource();
+                if (existingSource != null) {
+                    framesArray.add(existingSource.getFileName());
+                } else {
+                    PendingImageSave pendingSave = pendingSourceWrites.get(image);
+                    if (pendingSave == null) {
+                        String fileName = index + ".png";
+                        pendingSave = new PendingImageSave(image, source, fileName);
+                        pendingSourceWrites.put(image, pendingSave);
+                    }
+                    framesArray.add(pendingSave.getFileName());
                 }
             }
             dataJson.add("images", framesArray);
@@ -427,6 +468,9 @@ public class URLAnimatedImageMap extends URLImageMap {
             dataJson.add("markers", markerArray);
             mapDataJson.add(dataJson);
         }
+        if (!saveAsCopy) {
+            savePendingSourcesInParallel(pendingSourceWrites.values());
+        }
         json.add("mapdata", mapDataJson);
         storage.saveImageMapData(imageIndex, json);
         if (cachedColors != null) {
@@ -435,6 +479,175 @@ public class URLAnimatedImageMap extends URLImageMap {
                 frameCounts[i] = cachedImages[i] == null ? 0 : cachedImages[i].length;
             }
             PersistentColorCache.saveAnimated(this, loader.getIdentifier().asString(), width, height, cachedImages.length, frameCounts, ditheringType, imageDataRevision, cachedColors);
+        }
+    }
+
+    private void savePendingSourcesInParallel(Collection<PendingImageSave> pendingWrites) throws Exception {
+        if (pendingWrites.isEmpty()) {
+            return;
+        }
+        int workerCount = Math.min(pendingWrites.size(), ImageFrame.resolveProcessingThreadCount(0));
+        ThreadFactory threadFactory = new ThreadFactoryBuilder().setNameFormat("ImageFrame Image Save Thread #%d").build();
+        ExecutorService executor = Executors.newFixedThreadPool(workerCount, threadFactory);
+        List<Future<?>> futures = new ArrayList<>(pendingWrites.size());
+        try {
+            for (PendingImageSave pendingWrite : pendingWrites) {
+                futures.add(executor.submit(() -> {
+                    ensureNotInterrupted();
+                    pendingWrite.getImage().setSource(pendingWrite.getSource());
+                }));
+            }
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof RuntimeException) {
+                        throw (RuntimeException) cause;
+                    }
+                    throw new RuntimeException(cause);
+                }
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    private boolean isFrameStateIdentical(int currentFrame, int previousFrame) {
+        for (LazyMappedBufferedImage[] images : cachedImages) {
+            if (images == null || currentFrame >= images.length || previousFrame >= images.length || images[currentFrame] != images[previousFrame]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static BufferedImage copyImage(BufferedImage source) {
+        BufferedImage copy = new BufferedImage(source.getWidth(), source.getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics graphics = copy.getGraphics();
+        try {
+            graphics.drawImage(source, 0, 0, null);
+        } finally {
+            graphics.dispose();
+        }
+        return copy;
+    }
+
+    private static List<FrameRun> collectFrameRuns(Iterator<BufferedImage> frames) {
+        List<FrameRun> frameRuns = new ArrayList<>();
+        BufferedImage previous = null;
+        int ticks = 0;
+        while (frames.hasNext()) {
+            ensureNotInterrupted();
+            BufferedImage current = frames.next();
+            if (current == previous) {
+                ticks++;
+            } else {
+                if (previous != null) {
+                    frameRuns.add(new FrameRun(previous, ticks));
+                }
+                previous = current;
+                ticks = 1;
+            }
+        }
+        if (previous != null) {
+            frameRuns.add(new FrameRun(previous, ticks));
+        }
+        return frameRuns;
+    }
+
+    private static boolean areImagesEqual(BufferedImage image, LazyMappedBufferedImage mappedImage) {
+        BufferedImage previous = mappedImage.getIfLoaded();
+        if (previous == null) {
+            previous = mappedImage.get();
+        }
+        return MapUtils.areImagesEqual(image, previous);
+    }
+
+    private static long hashImage(BufferedImage image) {
+        long hash = FNV1A_64_OFFSET;
+        for (int y = 0; y < image.getHeight(); y++) {
+            for (int x = 0; x < image.getWidth(); x++) {
+                hash ^= image.getRGB(x, y);
+                hash *= FNV1A_64_PRIME;
+            }
+        }
+        hash ^= image.getWidth();
+        hash *= FNV1A_64_PRIME;
+        hash ^= image.getHeight();
+        hash *= FNV1A_64_PRIME;
+        return hash;
+    }
+
+    private static void ensureNotInterrupted() {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new CancellationException("Interrupted while processing animated map");
+        }
+    }
+
+    private static class TileState {
+
+        private final long hash;
+        private final LazyMappedBufferedImage image;
+
+        private TileState(long hash, LazyMappedBufferedImage image) {
+            this.hash = hash;
+            this.image = image;
+        }
+
+        public long getHash() {
+            return hash;
+        }
+
+        public LazyMappedBufferedImage getImage() {
+            return image;
+        }
+    }
+
+    private static class FrameRun {
+
+        private final BufferedImage image;
+        private final int ticks;
+
+        private FrameRun(BufferedImage image, int ticks) {
+            this.image = image;
+            this.ticks = ticks;
+        }
+
+        public BufferedImage getImage() {
+            return image;
+        }
+
+        public int getTicks() {
+            return ticks;
+        }
+    }
+
+    private static class PendingImageSave {
+
+        private final LazyMappedBufferedImage image;
+        private final LazyDataSource source;
+        private final String fileName;
+
+        private PendingImageSave(LazyMappedBufferedImage image, LazyDataSource source, String fileName) {
+            this.image = image;
+            this.source = source;
+            this.fileName = fileName;
+        }
+
+        public LazyMappedBufferedImage getImage() {
+            return image;
+        }
+
+        public LazyDataSource getSource() {
+            return source;
+        }
+
+        public String getFileName() {
+            return fileName;
         }
     }
 

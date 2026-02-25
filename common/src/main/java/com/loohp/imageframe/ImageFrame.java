@@ -206,6 +206,14 @@ public class ImageFrame extends JavaPlugin {
         return limit;
     }
 
+    public static int resolveProcessingThreadCount(int configuredCount) {
+        if (configuredCount > 0) {
+            return configuredCount;
+        }
+        int processors = Runtime.getRuntime().availableProcessors();
+        return Math.min(4, Math.max(1, processors / 2));
+    }
+
     public static boolean hasImageMapPermission(ImageMap imageMap, CommandSender sender, ImageMapAccessPermissionType permissionType) {
         if (permissionType == null) {
             return true;
@@ -349,7 +357,7 @@ public class ImageFrame extends JavaPlugin {
         mapMarkerLimit = config.getConfiguration().getInt("Settings.MapMarkerLimit");
         maxImageFileSize = config.getConfiguration().getLong("Settings.MaxImageFileSize");
         maxProcessingTime = config.getConfiguration().getInt("Settings.MaxProcessingTime");
-        parallelProcessingLimit = config.getConfiguration().getInt("Settings.ParallelProcessingLimit");
+        parallelProcessingLimit = resolveProcessingThreadCount(config.getConfiguration().getInt("Settings.ParallelProcessingLimit"));
 
         exemptMapIdsFromDeletion = config.getConfiguration().getList("Settings.ExemptMapIdsFromDeletion").stream().map(v -> {
             try {

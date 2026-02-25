@@ -32,8 +32,9 @@ Settings:
   #(In Seconds)
   MaxProcessingTime: 60
   #How many images should be processed in parallel
+  #Set to 0 to auto-detect (min(4, max(1, cpu/2)))
   #Updating this option requires a server restart
-  ParallelProcessingLimit: 1
+  ParallelProcessingLimit: 0
   #Max amount of image maps a player in the following groups can create
   #Setting -1 means unlimited
   #To add a player to a group, give the permission "imageframe.createlimit.<group>"
