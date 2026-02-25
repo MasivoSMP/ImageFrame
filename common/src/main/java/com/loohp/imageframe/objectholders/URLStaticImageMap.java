@@ -131,8 +131,8 @@ public class URLStaticImageMap extends URLImageMap {
                 cachedImages[i++] = StandardLazyMappedBufferedImage.fromImage(MapUtils.getSubImage(image, x, y, hdMapWidth));
             }
         }
-        reloadColorCache();
         touchImageDataRevision();
+        reloadColorCache();
         Bukkit.getPluginManager().callEvent(new ImageMapUpdatedEvent(this));
         send(getViewers());
         if (save) {

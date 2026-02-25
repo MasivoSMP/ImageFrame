@@ -323,10 +323,16 @@ public class ImageMapManager implements AutoCloseable {
             for (int i = 0; i < total; i++) {
                 try {
                     MutablePair<String, ImageMap> loaded = completionService.take().get();
-                    long registrationStart = System.nanoTime();
-                    addMap(loaded.getSecond(), false);
-                    registrationTimeNanos += System.nanoTime() - registrationStart;
-                    loadedCount++;
+                    try {
+                        long registrationStart = System.nanoTime();
+                        addMap(loaded.getSecond(), false);
+                        registrationTimeNanos += System.nanoTime() - registrationStart;
+                        loadedCount++;
+                    } catch (Throwable e) {
+                        failedCount++;
+                        Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to register loaded ImageMap during startup warmup");
+                        e.printStackTrace();
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw e;

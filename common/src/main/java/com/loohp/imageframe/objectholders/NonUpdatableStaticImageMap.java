@@ -130,7 +130,6 @@ public class NonUpdatableStaticImageMap extends ImageMap {
     @Override
     public void update(boolean save) throws Exception {
         reloadColorCache();
-        touchImageDataRevision();
         Bukkit.getPluginManager().callEvent(new ImageMapUpdatedEvent(this));
         send(getViewers());
         if (save) {

@@ -199,8 +199,8 @@ public class URLAnimatedImageMap extends URLImageMap {
             }
             index++;
         }
-        reloadColorCache();
         touchImageDataRevision();
+        reloadColorCache();
         Bukkit.getPluginManager().callEvent(new ImageMapUpdatedEvent(this));
         if (save) {
             save();
