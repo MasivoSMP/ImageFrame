@@ -30,6 +30,8 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.map.MapView;
 
+import java.util.List;
+
 public class ImageFilledMapUtils {
 
     public static void processImageFilledMaps(SlotAccessor slotAccess, int size) {
@@ -72,7 +74,18 @@ public class ImageFilledMapUtils {
             }
         } else {
             ImageMap imageMap = ImageFrame.imageMapManager.getFromImageId(info.getImageMapIndex());
-            MapView correctMapView = imageMap.getMapViews().get(info.getMapPartIndex());
+            if (imageMap == null) {
+                return null;
+            }
+            int partIndex = info.getMapPartIndex();
+            List<MapView> mapViews = imageMap.getMapViews();
+            if (partIndex < 0 || partIndex >= mapViews.size()) {
+                return null;
+            }
+            MapView correctMapView = mapViews.get(partIndex);
+            if (correctMapView == null) {
+                return null;
+            }
             if (mapView == null || correctMapView.getId() != mapView.getId()) {
                 mapMeta.setMapView(correctMapView);
                 itemStack.setItemMeta(mapMeta);

@@ -77,11 +77,15 @@ public class PlayerUtils {
     @SuppressWarnings("deprecation")
     public static String getPlayerLanguage(Player player) {
         return ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId()).getPreference(IFPlayerPreference.LANGUAGE, LanguageState.class).getCalculatedValue(() -> {
+            String configuredLanguage = ImageFrame.language;
+            if (configuredLanguage != null && !configuredLanguage.isEmpty()) {
+                return configuredLanguage;
+            }
             String playerLanguage = player.getLocale();
             if (!playerLanguage.isEmpty()) {
                 return playerLanguage;
             }
-            return ImageFrame.language;
+            return configuredLanguage;
         });
     }
 

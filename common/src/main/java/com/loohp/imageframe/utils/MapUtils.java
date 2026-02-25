@@ -68,7 +68,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class MapUtils {
 
@@ -80,6 +83,7 @@ public class MapUtils {
 
     public static final String GIF_CONTENT_TYPE = "image/gif";
     public static final List<BlockFace> CARTESIAN_BLOCK_FACES = Collections.unmodifiableList(Arrays.asList(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST, BlockFace.UP, BlockFace.DOWN));
+    private static final ConcurrentHashMap<UUID, AtomicInteger> WORLD_DATA_NEXT_ID_CACHE = new ConcurrentHashMap<>();
 
     @SuppressWarnings("removal")
     private static byte[] generateGrayScale() {
@@ -93,6 +97,43 @@ public class MapUtils {
             result[i++] = b;
         }
         return result;
+    }
+
+    private static AtomicInteger getWorldDataNextIdCounter(World world) {
+        return WORLD_DATA_NEXT_ID_CACHE.computeIfAbsent(world.getUID(), key -> new AtomicInteger(scanWorldDataNextId(world)));
+    }
+
+    private static int scanWorldDataNextId(World world) {
+        File worldDataFolder = new File(world.getWorldFolder(), "data");
+        if (!worldDataFolder.exists() || !worldDataFolder.isDirectory()) {
+            return 0;
+        }
+        File[] files = worldDataFolder.listFiles();
+        if (files == null) {
+            return 0;
+        }
+        int maxId = -1;
+        int prefixLength = "map_".length();
+        for (File file : files) {
+            String name = file.getName();
+            if (!name.startsWith("map_")) {
+                continue;
+            }
+            int dotIndex = name.indexOf('.');
+            if (dotIndex <= prefixLength) {
+                continue;
+            }
+            String idPart = name.substring(prefixLength, dotIndex);
+            try {
+                int id = Integer.parseInt(idPart);
+                if (id > maxId) {
+                    maxId = id;
+                }
+            } catch (NumberFormatException ignored) {
+                // Ignore non-integer map file names.
+            }
+        }
+        return maxId + 1;
     }
 
     public static World getMainWorld() {
@@ -394,27 +435,17 @@ public class MapUtils {
     public static Future<MapView> createMap(World world) {
         return FutureUtils.callSyncMethod(() -> {
             int worldNextId = NMS.getInstance().getNextAvailableMapId(world);
-            int ifNextId = ImageFrame.imageMapManager.getMaps().stream().flatMap(i -> i.getMapIds().stream()).mapToInt(i -> i).max().orElse(-1) + 1;
-            int worldDataNextId;
-            File worldDataFolder = new File(world.getWorldFolder(), "data");
-            if (worldDataFolder.exists() && worldDataFolder.isDirectory()) {
-                worldDataNextId = Arrays.stream(worldDataFolder.listFiles())
-                        .map(f -> f.getName())
-                        .filter(s -> s.startsWith("map_"))
-                        .map(s -> {
-                            try {
-                                return Integer.parseInt(s.substring("map_".length(), s.indexOf(".")));
-                            } catch (NumberFormatException e) {
-                                return null;
-                            }
-                        })
-                        .filter(s -> s != null)
-                        .mapToInt(i -> i)
-                        .max().orElse(-1) + 1;
-            } else {
-                worldDataNextId = 0;
+            int ifNextId = ImageFrame.imageMapManager.getMaxMapId() + 1;
+            int candidate = Math.max(worldNextId, ifNextId);
+            AtomicInteger worldDataNextId = getWorldDataNextIdCounter(world);
+            int id;
+            while (true) {
+                int current = worldDataNextId.get();
+                id = Math.max(candidate, current);
+                if (worldDataNextId.compareAndSet(current, id + 1)) {
+                    break;
+                }
             }
-            int id = Math.max(worldNextId, Math.max(ifNextId, worldDataNextId));
             tryDeleteBlankDataFile(world, id);
             return NMS.getInstance().getMapOrCreateMissing(world, id);
         });

@@ -98,7 +98,6 @@ import static com.loohp.imageframe.language.TranslationKey.*;
 import static com.loohp.imageframe.utils.CommandSenderUtils.sendMessage;
 import static com.loohp.imageframe.utils.ComponentUtils.translatable;
 import static net.kyori.adventure.text.Component.text;
-import static net.kyori.adventure.text.Component.translatable;
 
 public class Commands implements CommandExecutor, TabCompleter {
 
@@ -245,7 +244,9 @@ public class Commands implements CommandExecutor, TabCompleter {
                                         if (ImageFrame.uploadServiceEnabled && url.equalsIgnoreCase("upload")) {
                                             UUID user = isConsole ? ImageMap.CONSOLE_CREATOR : player.getUniqueId();
                                             PendingUpload pendingUpload = ImageFrame.imageUploadManager.newPendingUpload(user);
-                                            Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user)).color(NamedTextColor.GREEN)), 2);
+                                            String displayUrl = pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user);
+                                            Component displayComponent = text(displayUrl).clickEvent(ClickEvent.openUrl(displayUrl));
+                                            Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, displayComponent).color(NamedTextColor.GREEN)), 2);
                                             url = pendingUpload.getFileBlocking().toURI().toURL().toString();
                                         }
                                         if (HTTPRequestUtils.getContentSize(url) > ImageFrame.maxImageFileSize) {
@@ -399,7 +400,9 @@ public class Commands implements CommandExecutor, TabCompleter {
                                             if (ImageFrame.uploadServiceEnabled && url.equalsIgnoreCase("upload")) {
                                                 UUID user = player.getUniqueId();
                                                 PendingUpload pendingUpload = ImageFrame.imageUploadManager.newPendingUpload(user);
-                                                Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user)).color(NamedTextColor.GREEN)), 2);
+                                                String displayUrl = pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user);
+                                                Component displayComponent = text(displayUrl).clickEvent(ClickEvent.openUrl(displayUrl));
+                                                Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, displayComponent).color(NamedTextColor.GREEN)), 2);
                                                 url = pendingUpload.getFileBlocking().toURI().toURL().toString();
                                             }
                                             if (!ImageFrame.isURLAllowed(url)) {
@@ -845,7 +848,9 @@ public class Commands implements CommandExecutor, TabCompleter {
                                         if (ImageFrame.uploadServiceEnabled && urlImageMap.getUrl().equalsIgnoreCase("upload")) {
                                             UUID user = !(sender instanceof Player) ? ImageMap.CONSOLE_CREATOR : ((Player) sender).getUniqueId();
                                             PendingUpload pendingUpload = ImageFrame.imageUploadManager.newPendingUpload(user);
-                                            Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user)).color(NamedTextColor.GREEN)), 2);
+                                            String displayUrl = pendingUpload.getUrl(ImageFrame.uploadServiceDisplayURL, user);
+                                            Component displayComponent = text(displayUrl).clickEvent(ClickEvent.openUrl(displayUrl));
+                                            Scheduler.runTaskLaterAsynchronously(ImageFrame.plugin, () -> sendMessage(sender, translatable(UPLOAD_LINK, displayComponent).color(NamedTextColor.GREEN)), 2);
                                             String newUrl = pendingUpload.getFileBlocking().toURI().toURL().toString();
                                             if (HTTPRequestUtils.getContentSize(newUrl) > ImageFrame.maxImageFileSize) {
                                                 sendMessage(sender, translatable(IMAGE_OVER_MAX_FILE_SIZE, ImageFrame.maxImageFileSize).color(NamedTextColor.RED));

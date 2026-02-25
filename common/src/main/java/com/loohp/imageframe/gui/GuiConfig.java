@@ -40,14 +40,20 @@ public class GuiConfig {
     private final String listTitle;
     private final String listEmptyMessage;
 
+    private final String renamePromptMessage;
+    private final String renameCancelledMessage;
+    private final String renameInvalidNameMessage;
+    private final String renameFailedMessage;
+
     private final GuiItemTemplate listFiller;
     private final GuiItemTemplate listPrev;
     private final GuiItemTemplate listPrevDisabled;
     private final GuiItemTemplate listNext;
     private final GuiItemTemplate listNextDisabled;
-    private final GuiItemTemplate listRefresh;
+    private final GuiItemTemplate listCreate;
     private final GuiItemTemplate listClose;
     private final GuiItemTemplate listImageIcon;
+    private final GuiItemTemplate listLoading;
 
     private final String confirmDeleteTitle;
     private final GuiItemTemplate confirmDeleteFiller;
@@ -57,14 +63,19 @@ public class GuiConfig {
     public GuiConfig(
             String listTitle,
             String listEmptyMessage,
+            String renamePromptMessage,
+            String renameCancelledMessage,
+            String renameInvalidNameMessage,
+            String renameFailedMessage,
             GuiItemTemplate listFiller,
             GuiItemTemplate listPrev,
             GuiItemTemplate listPrevDisabled,
             GuiItemTemplate listNext,
             GuiItemTemplate listNextDisabled,
-            GuiItemTemplate listRefresh,
+            GuiItemTemplate listCreate,
             GuiItemTemplate listClose,
             GuiItemTemplate listImageIcon,
+            GuiItemTemplate listLoading,
             String confirmDeleteTitle,
             GuiItemTemplate confirmDeleteFiller,
             GuiItemTemplate confirmDeleteConfirm,
@@ -72,14 +83,19 @@ public class GuiConfig {
     ) {
         this.listTitle = listTitle;
         this.listEmptyMessage = listEmptyMessage;
+        this.renamePromptMessage = renamePromptMessage;
+        this.renameCancelledMessage = renameCancelledMessage;
+        this.renameInvalidNameMessage = renameInvalidNameMessage;
+        this.renameFailedMessage = renameFailedMessage;
         this.listFiller = listFiller;
         this.listPrev = listPrev;
         this.listPrevDisabled = listPrevDisabled;
         this.listNext = listNext;
         this.listNextDisabled = listNextDisabled;
-        this.listRefresh = listRefresh;
+        this.listCreate = listCreate;
         this.listClose = listClose;
         this.listImageIcon = listImageIcon;
+        this.listLoading = listLoading;
         this.confirmDeleteTitle = confirmDeleteTitle;
         this.confirmDeleteFiller = confirmDeleteFiller;
         this.confirmDeleteConfirm = confirmDeleteConfirm;
@@ -92,6 +108,12 @@ public class GuiConfig {
             root = config.createSection(ROOT);
         }
 
+        ConfigurationSection messages = section(root, "Messages");
+        String renamePromptMessage = color(messages.getString("RenamePrompt", "&eType a new name in chat for \"{Name}\", or type 'cancel'."));
+        String renameCancelledMessage = color(messages.getString("RenameCancelled", "&7Rename cancelled."));
+        String renameInvalidNameMessage = color(messages.getString("RenameInvalidName", "&cInvalid name. Use a single word (no spaces), or type 'cancel'."));
+        String renameFailedMessage = color(messages.getString("RenameFailed", "&cRename failed. See console for details."));
+
         ConfigurationSection list = section(root, "List");
         String listTitle = color(list.getString("Title", "&3ImageFrame - &b{Owner}"));
         String listEmptyMessage = color(list.getString("EmptyMessage", "&7You have no ImageMaps."));
@@ -101,9 +123,15 @@ public class GuiConfig {
         GuiItemTemplate listPrevDisabled = GuiItemTemplate.from(section(list, "PreviousDisabled"), Material.BARRIER, "&8Previous Page");
         GuiItemTemplate listNext = GuiItemTemplate.from(section(list, "Next"), Material.ARROW, "&eNext Page");
         GuiItemTemplate listNextDisabled = GuiItemTemplate.from(section(list, "NextDisabled"), Material.BARRIER, "&8Next Page");
-        GuiItemTemplate listRefresh = GuiItemTemplate.from(section(list, "Refresh"), Material.SLIME_BALL, "&aRefresh");
+        ConfigurationSection createButtonSection = list.getConfigurationSection("Create");
+        if (createButtonSection == null) {
+            ConfigurationSection legacyRefreshSection = list.getConfigurationSection("Refresh");
+            createButtonSection = legacyRefreshSection == null ? list.createSection("Create") : legacyRefreshSection;
+        }
+        GuiItemTemplate listCreate = GuiItemTemplate.from(createButtonSection, Material.LIME_DYE, "&aCreate Image");
         GuiItemTemplate listClose = GuiItemTemplate.from(section(list, "Close"), Material.BARRIER, "&cClose");
         GuiItemTemplate listImageIcon = GuiItemTemplate.from(section(list, "ImageIcon"), Material.FILLED_MAP, "&b{Name}");
+        GuiItemTemplate listLoading = GuiItemTemplate.from(section(list, "Loading"), Material.RED_STAINED_GLASS_PANE, "&cLoading images...");
 
         ConfigurationSection confirm = section(root, "ConfirmDelete");
         String confirmDeleteTitle = color(confirm.getString("Title", "&cDelete &e{Name}&c?"));
@@ -114,14 +142,19 @@ public class GuiConfig {
         return new GuiConfig(
                 listTitle,
                 listEmptyMessage,
+                renamePromptMessage,
+                renameCancelledMessage,
+                renameInvalidNameMessage,
+                renameFailedMessage,
                 listFiller,
                 listPrev,
                 listPrevDisabled,
                 listNext,
                 listNextDisabled,
-                listRefresh,
+                listCreate,
                 listClose,
                 listImageIcon,
+                listLoading,
                 confirmDeleteTitle,
                 confirmDeleteFiller,
                 confirmDeleteConfirm,
@@ -149,6 +182,22 @@ public class GuiConfig {
         return listEmptyMessage;
     }
 
+    public String renamePromptMessage(Map<String, String> placeholders) {
+        return apply(renamePromptMessage, placeholders);
+    }
+
+    public String getRenameCancelledMessage() {
+        return renameCancelledMessage;
+    }
+
+    public String getRenameInvalidNameMessage() {
+        return renameInvalidNameMessage;
+    }
+
+    public String getRenameFailedMessage() {
+        return renameFailedMessage;
+    }
+
     public GuiItemTemplate getListFiller() {
         return listFiller;
     }
@@ -169,8 +218,8 @@ public class GuiConfig {
         return listNextDisabled;
     }
 
-    public GuiItemTemplate getListRefresh() {
-        return listRefresh;
+    public GuiItemTemplate getListCreate() {
+        return listCreate;
     }
 
     public GuiItemTemplate getListClose() {
@@ -179,6 +228,10 @@ public class GuiConfig {
 
     public GuiItemTemplate getListImageIcon() {
         return listImageIcon;
+    }
+
+    public GuiItemTemplate getListLoading() {
+        return listLoading;
     }
 
     public String confirmDeleteTitle(Map<String, String> placeholders) {
@@ -302,4 +355,3 @@ public class GuiConfig {
         }
     }
 }
-

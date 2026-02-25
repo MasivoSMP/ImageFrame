@@ -121,6 +121,12 @@ Hooks:
 
 #GUI settings (Used by /imageframe list)
 Gui:
+  Messages:
+    #Supported placeholders: {Name}, {ImageID}
+    RenamePrompt: "&eType a new name in chat for \"{Name}\", or type 'cancel'."
+    RenameCancelled: "&7Rename cancelled."
+    RenameInvalidName: "&cInvalid name. Use a single word (no spaces), or type 'cancel'."
+    RenameFailed: "&cRename failed. See console for details."
   List:
     #Supported placeholders: {Owner}, {OwnerUUID}, {Page}, {PageMax}, {Total}
     Title: "&3ImageFrame - &b{Owner}"
@@ -151,9 +157,9 @@ Gui:
       Name: "&8Next Page"
       Lore: []
       CustomModelData: 0.0
-    Refresh:
-      Material: SLIME_BALL
-      Name: "&aRefresh"
+    Create:
+      Material: LIME_DYE
+      Name: "&aCreate Image"
       Lore: []
       CustomModelData: 0.0
     Close:
@@ -161,6 +167,13 @@ Gui:
       Material: BARRIER
       Name: "&cClose"
       Lore: []
+      CustomModelData: 0.0
+    Loading:
+      Material: RED_STAINED_GLASS_PANE
+      Name: "&cLoading images..."
+      Lore:
+        - "&7Your images are still loading."
+        - "&7This may take a few minutes."
       CustomModelData: 0.0
     #Supported placeholders: {ImageID}, {Name}, {Width}, {Height}, {CreatorName}, {CreatorUUID}, {TimeCreated}
     ImageIcon:

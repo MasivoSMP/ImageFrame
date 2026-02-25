@@ -49,9 +49,9 @@ public class ImageListMenu {
     public static final int IMAGE_SLOTS = ImageListMenuHolder.IMAGE_SLOTS;
 
     public static final int SLOT_PREV = 45;
-    public static final int SLOT_REFRESH = 49;
-    public static final int SLOT_CLOSE = 50;
+    public static final int SLOT_CREATE = 49;
     public static final int SLOT_NEXT = 53;
+    public static final int SLOT_LOADING = 48;
 
     public static void open(Player viewer, OfflinePlayer owner) {
         open(viewer, owner.getUniqueId(), owner.getName(), 0);
@@ -71,6 +71,7 @@ public class ImageListMenu {
         int total = maps.size();
         int maxPage = total == 0 ? 0 : Math.max(0, (total - 1) / IMAGE_SLOTS);
         int safePage = Math.max(0, Math.min(page, maxPage));
+        boolean isLoading = ImageFrame.imageMapManager.isLoading();
 
         String ownerDisplay = ownerName == null ? ownerUuid.toString() : ownerName;
         Map<String, String> titlePlaceholders = new HashMap<>();
@@ -91,8 +92,9 @@ public class ImageListMenu {
         GuiItemTemplate prevDisabledTemplate = ImageFrame.guiConfig.getListPrevDisabled();
         GuiItemTemplate nextTemplate = ImageFrame.guiConfig.getListNext();
         GuiItemTemplate nextDisabledTemplate = ImageFrame.guiConfig.getListNextDisabled();
-        GuiItemTemplate refreshTemplate = ImageFrame.guiConfig.getListRefresh();
+        GuiItemTemplate createTemplate = ImageFrame.guiConfig.getListCreate();
         GuiItemTemplate closeTemplate = ImageFrame.guiConfig.getListClose();
+        GuiItemTemplate loadingTemplate = ImageFrame.guiConfig.getListLoading();
 
         for (int i = 0; i < SIZE; i++) {
             inv.setItem(i, filler.clone());
@@ -109,9 +111,13 @@ public class ImageListMenu {
 
         inv.setItem(SLOT_PREV, (safePage > 0 ? prevTemplate : closeTemplate).create(Collections.emptyMap()));
         inv.setItem(SLOT_NEXT, (safePage < maxPage ? nextTemplate : nextDisabledTemplate).create(Collections.emptyMap()));
-        inv.setItem(SLOT_REFRESH, refreshTemplate.create(Collections.emptyMap()));
+        inv.setItem(SLOT_CREATE, createTemplate.create(Collections.emptyMap()));
 
-        if (total == 0) {
+        if (isLoading) {
+            inv.setItem(SLOT_LOADING, loadingTemplate.create(titlePlaceholders));
+        }
+
+        if (total == 0 && !isLoading) {
             String msg = ImageFrame.guiConfig.getListEmptyMessage();
             if (msg != null && !msg.isEmpty()) {
                 sendMessage(viewer, msg);

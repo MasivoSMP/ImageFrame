@@ -27,6 +27,8 @@ import com.loohp.imageframe.objectholders.IFPlayer;
 import com.loohp.imageframe.objectholders.IFPlayerManager;
 import com.loohp.imageframe.objectholders.ImageMap;
 import com.loohp.imageframe.objectholders.ImageMapLoaders;
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
 import com.loohp.imageframe.objectholders.ImageMapManager;
 import com.loohp.imageframe.objectholders.LazyDataSource;
 import com.loohp.imageframe.objectholders.MutablePair;
@@ -59,9 +61,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntConsumer;
 
-import static com.loohp.imageframe.objectholders.ImageMapManager.GSON;
-
 public class FileImageFrameStorage implements ImageFrameStorage {
+
+    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().create();
 
     private final File imageMapFolder;
     private final File playerDataFolder;

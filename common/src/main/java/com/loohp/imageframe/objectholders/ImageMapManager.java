@@ -69,6 +69,8 @@ public class ImageMapManager implements AutoCloseable {
     private final Map<MapView, ImageMap> mapsByView;
     private final List<ImageMapRenderEventListener> renderEventListeners;
     private final Set<Integer> deletedMapIds;
+    private final AtomicInteger loadingCount;
+    private final AtomicInteger maxMapId;
 
     public ImageMapManager(ImageFrameStorage imageFrameStorage) {
         this.maps = new ConcurrentHashMap<>();
@@ -76,6 +78,8 @@ public class ImageMapManager implements AutoCloseable {
         this.imageFrameStorage = imageFrameStorage;
         this.renderEventListeners = new CopyOnWriteArrayList<>();
         this.deletedMapIds = ConcurrentHashMap.newKeySet();
+        this.loadingCount = new AtomicInteger(0);
+        this.maxMapId = new AtomicInteger(-1);
     }
 
     public ImageFrameStorage getStorage() {
@@ -117,6 +121,7 @@ public class ImageMapManager implements AutoCloseable {
         int originalImageIndex = map.getImageIndex();
         imageFrameStorage.prepareImageIndex(map, i -> map.imageIndex = i);
         maps.put(map.getImageIndex(), map);
+        updateMaxMapId(map);
         for (MapView mapView : map.getMapViews()) {
             mapsByView.put(mapView, map);
             deletedMapIds.remove(mapView.getId());
@@ -241,6 +246,14 @@ public class ImageMapManager implements AutoCloseable {
         return Collections.unmodifiableSet(deletedMapIds);
     }
 
+    public int getMaxMapId() {
+        return maxMapId.get();
+    }
+
+    public boolean isLoading() {
+        return loadingCount.get() > 0;
+    }
+
     public boolean isMapDeleted(int mapId) {
         return deletedMapIds.contains(mapId);
     }
@@ -250,22 +263,33 @@ public class ImageMapManager implements AutoCloseable {
     }
 
     public synchronized void loadMaps(IFPlayerManager ifPlayerManager) {
+        loadingCount.incrementAndGet();
+        maxMapId.set(-1);
         maps.clear();
         mapsByView.clear();
-        List<MutablePair<String, Future<? extends ImageMap>>> futures = imageFrameStorage.loadMaps(this, deletedMapIds, ifPlayerManager);
-        Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
-            int count = 0;
-            for (MutablePair<String, Future<? extends ImageMap>> pair : futures) {
+        try {
+            List<MutablePair<String, Future<? extends ImageMap>>> futures = imageFrameStorage.loadMaps(this, deletedMapIds, ifPlayerManager);
+            Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
+                int count = 0;
                 try {
-                    addMap(pair.getSecond().get());
-                    count++;
-                } catch (Throwable e) {
-                    Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to load ImageMap data in " + pair.getFirst());
-                    e.printStackTrace();
+                    for (MutablePair<String, Future<? extends ImageMap>> pair : futures) {
+                        try {
+                            addMap(pair.getSecond().get());
+                            count++;
+                        } catch (Throwable e) {
+                            Bukkit.getConsoleSender().sendMessage(ChatColor.RED + "[ImageFrame] Unable to load ImageMap data in " + pair.getFirst());
+                            e.printStackTrace();
+                        }
+                    }
+                    Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[ImageFrame] Data loading completed! Loaded " + count + " ImageMaps!");
+                } finally {
+                    loadingCount.decrementAndGet();
                 }
-            }
-            Bukkit.getConsoleSender().sendMessage(ChatColor.GREEN + "[ImageFrame] Data loading completed! Loaded " + count + " ImageMaps!");
-        });
+            });
+        } catch (Throwable e) {
+            loadingCount.decrementAndGet();
+            throw e;
+        }
     }
 
     public void syncMaps() {
@@ -300,6 +324,19 @@ public class ImageMapManager implements AutoCloseable {
 
     public synchronized void saveDeletedMaps() {
         imageFrameStorage.saveDeletedMaps(deletedMapIds);
+    }
+
+    private void updateMaxMapId(ImageMap map) {
+        int mapMaxId = -1;
+        for (int id : map.getMapIds()) {
+            if (id > mapMaxId) {
+                mapMaxId = id;
+            }
+        }
+        if (mapMaxId >= 0) {
+            final int finalMapMaxId = mapMaxId;
+            maxMapId.updateAndGet(current -> Math.max(current, finalMapMaxId));
+        }
     }
 
     public void sendAllMaps(Collection<? extends Player> players) {

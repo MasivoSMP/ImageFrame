@@ -27,6 +27,7 @@ import com.loohp.imageframe.utils.MapUtils;
 import com.loohp.platformscheduler.Scheduler;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -128,13 +129,13 @@ public class GuiListener implements Listener {
 
             String trimmed = message == null ? "" : message.trim();
             if (trimmed.equalsIgnoreCase("cancel")) {
-                sendMessage(player, Component.text("Rename cancelled.", NamedTextColor.GRAY));
+                sendMessage(player, ImageFrame.guiConfig.getRenameCancelledMessage());
                 ImageListMenu.open(player, ended.getOwnerUuid(), ended.getOwnerName(), ended.getPage());
                 return;
             }
 
             if (trimmed.isEmpty() || trimmed.contains(" ")) {
-                sendMessage(player, Component.text("Invalid name. Use a single word (no spaces), or type 'cancel'.", NamedTextColor.RED));
+                sendMessage(player, ImageFrame.guiConfig.getRenameInvalidNameMessage());
                 ImageListMenu.open(player, ended.getOwnerUuid(), ended.getOwnerName(), ended.getPage());
                 return;
             }
@@ -174,7 +175,7 @@ public class GuiListener implements Listener {
                         if (!player.isOnline()) {
                             return;
                         }
-                        sendMessage(player, Component.text("Rename failed. See console for details.", NamedTextColor.RED));
+                        sendMessage(player, ImageFrame.guiConfig.getRenameFailedMessage());
                         ImageListMenu.open(player, ended.getOwnerUuid(), ended.getOwnerName(), ended.getPage());
                     }, player);
                 }
@@ -231,7 +232,10 @@ public class GuiListener implements Listener {
                 }
                 renameSessionManager.begin(player.getUniqueId(), holder.getOwnerUuid(), holder.getOwnerName(), holder.getPage(), imageId);
                 player.closeInventory();
-                sendMessage(player, Component.text("Type a new name in chat for \"" + imageMap.getName() + "\", or type 'cancel'.", NamedTextColor.YELLOW));
+                java.util.Map<String, String> placeholders = new java.util.HashMap<>();
+                placeholders.put("Name", imageMap.getName());
+                placeholders.put("ImageID", String.valueOf(imageMap.getImageIndex()));
+                sendMessage(player, ImageFrame.guiConfig.renamePromptMessage(placeholders));
                 return;
             }
             return;
@@ -243,8 +247,10 @@ public class GuiListener implements Listener {
             player.closeInventory();
         } else if (rawSlot == ImageListMenu.SLOT_NEXT) {
             ImageListMenu.open(player, holder.getOwnerUuid(), holder.getOwnerName(), holder.getPage() + 1);
-        } else if (rawSlot == ImageListMenu.SLOT_REFRESH) {
-            ImageListMenu.open(player, holder.getOwnerUuid(), holder.getOwnerName(), holder.getPage());
+        } else if (rawSlot == ImageListMenu.SLOT_CREATE) {
+            player.closeInventory();
+            String playerName = player.getName();
+            Scheduler.runTaskLater(ImageFrame.plugin, () -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "dialog open imageframe_create " + playerName), 3);
         }
     }
 
