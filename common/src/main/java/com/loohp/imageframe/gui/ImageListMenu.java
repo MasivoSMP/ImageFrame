@@ -20,22 +20,6 @@
 
 package com.loohp.imageframe.gui;
 
-import com.loohp.imageframe.ImageFrame;
-import com.loohp.imageframe.gui.GuiConfig.GuiItemTemplate;
-import com.loohp.imageframe.objectholders.BooleanState;
-import com.loohp.imageframe.objectholders.IFPlayer;
-import com.loohp.imageframe.objectholders.IFPlayerPreference;
-import com.loohp.imageframe.objectholders.ImageMap;
-import com.loohp.platformscheduler.Scheduler;
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
-import org.bukkit.Bukkit;
-import org.bukkit.OfflinePlayer;
-import org.bukkit.entity.Player;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.MapMeta;
-
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
@@ -44,7 +28,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import org.bukkit.Bukkit;
+import org.bukkit.OfflinePlayer;
+import org.bukkit.entity.Player;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.MapMeta;
+
+import com.loohp.imageframe.ImageFrame;
+import com.loohp.imageframe.gui.GuiConfig.GuiItemTemplate;
+import com.loohp.imageframe.objectholders.BooleanState;
+import com.loohp.imageframe.objectholders.IFPlayer;
+import com.loohp.imageframe.objectholders.IFPlayerPreference;
+import com.loohp.imageframe.objectholders.ImageMap;
 import static com.loohp.imageframe.utils.CommandSenderUtils.sendMessage;
+import com.loohp.platformscheduler.Scheduler;
+
+import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
 
 public class ImageListMenu {
 
@@ -55,7 +56,7 @@ public class ImageListMenu {
     public static final int SLOT_CREATE = 49;
     public static final int SLOT_VIEW_ANIMATED_MAPS = 51;
     public static final int SLOT_NEXT = 53;
-    public static final int SLOT_LOADING = 48;
+    public static final int SLOT_LOADING = 47;
 
     public static void open(Player viewer, OfflinePlayer owner) {
         open(viewer, owner.getUniqueId(), owner.getName(), 0);

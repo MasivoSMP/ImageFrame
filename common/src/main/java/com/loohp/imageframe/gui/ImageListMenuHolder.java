@@ -20,14 +20,14 @@
 
 package com.loohp.imageframe.gui;
 
+import java.util.UUID;
+
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryHolder;
 
-import java.util.UUID;
-
 public class ImageListMenuHolder implements InventoryHolder {
 
-    public static final int IMAGE_SLOTS = 45;
+    public static final int IMAGE_SLOTS = 36;
 
     private final UUID ownerUuid;
     private final String ownerName;
