@@ -60,6 +60,19 @@ Settings:
   #Changing this option requires a restart
   HandleAnimatedMapsOnMainThread: false
   SendAnimatedMapsOnMainThread: false
+  #Maximum distance (in blocks) to send nearby animated frame updates to a player
+  AnimatedUpdateDistanceBlocks: 64
+  #Additional distance buffer for stopping updates to avoid rapid toggling at the edge
+  AnimatedUpdateDistanceHysteresisBlocks: 8
+  #Spacing between initial animated image sends to the same player (in milliseconds)
+  InitialSendSpacingMs: 2500
+  #Minimum number of nearby animated images before per-player throttling starts
+  #Set to 3 to match default behavior (3->50%, 4->25%, 5->12.5%, etc.)
+  AnimatedThrottleStartCount: 3
+  #Minimum delay between throttle action-bar notices for the same player (in milliseconds)
+  AnimatedThrottleNoticeCooldownMs: 3000
+  #Whether to show an action-bar notice when animated update throttling is lifted
+  AnimatedThrottleShowRestoreNotice: false
   Startup:
     #How many worker threads should be used for startup map loading and cache warmup.
     #Set to 0 to auto-detect (min(4, max(1, cpu/2))).

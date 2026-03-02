@@ -32,6 +32,8 @@ public class TranslationKey {
     public static final String IMAGE_MAP_PROCESSING = "imageframe.messages.image_map_processing";
     public static final String IMAGE_MAP_PROCESSING_ACTION_BAR = "imageframe.messages.image_map_processing_action_bar";
     public static final String IMAGE_MAP_QUEUED_ACTION_BAR = "imageframe.messages.image_map_queued_action_bar";
+    public static final String ANIMATED_UPDATES_THROTTLED_ACTION_BAR = "imageframe.messages.animated_updates_throttled_action_bar";
+    public static final String ANIMATED_UPDATES_RESTORED_ACTION_BAR = "imageframe.messages.animated_updates_restored_action_bar";
     public static final String IMAGE_MAP_CREATED = "imageframe.messages.image_map_created";
     public static final String IMAGE_MAP_REFRESHED = "imageframe.messages.image_map_refreshed";
     public static final String IMAGE_MAP_DELETED = "imageframe.messages.image_map_deleted";

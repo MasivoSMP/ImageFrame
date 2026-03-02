@@ -113,6 +113,12 @@ public class ImageFrame extends JavaPlugin {
     public static boolean mapRenderersContextual;
     public static boolean handleAnimatedMapsOnMainThread;
     public static boolean sendAnimatedMapsOnMainThread;
+    public static int animatedUpdateDistanceBlocks;
+    public static int animatedUpdateDistanceHysteresisBlocks;
+    public static long initialSendSpacingMs;
+    public static int animatedThrottleStartCount;
+    public static long animatedThrottleNoticeCooldownMs;
+    public static boolean animatedThrottleShowRestoreNotice;
     public static int startupCacheWarmupThreads;
     public static boolean startupPersistentColorCache;
 
@@ -377,6 +383,12 @@ public class ImageFrame extends JavaPlugin {
         mapRenderersContextual = config.getConfiguration().getBoolean("Settings.MapRenderersContextual");
         handleAnimatedMapsOnMainThread = config.getConfiguration().getBoolean("Settings.HandleAnimatedMapsOnMainThread");
         sendAnimatedMapsOnMainThread = config.getConfiguration().getBoolean("Settings.SendAnimatedMapsOnMainThread");
+        animatedUpdateDistanceBlocks = Math.max(0, config.getConfiguration().getInt("Settings.AnimatedUpdateDistanceBlocks", 64));
+        animatedUpdateDistanceHysteresisBlocks = Math.max(0, config.getConfiguration().getInt("Settings.AnimatedUpdateDistanceHysteresisBlocks", 8));
+        initialSendSpacingMs = Math.max(0L, config.getConfiguration().getLong("Settings.InitialSendSpacingMs", 2500L));
+        animatedThrottleStartCount = Math.max(1, config.getConfiguration().getInt("Settings.AnimatedThrottleStartCount", 3));
+        animatedThrottleNoticeCooldownMs = Math.max(0L, config.getConfiguration().getLong("Settings.AnimatedThrottleNoticeCooldownMs", 3000L));
+        animatedThrottleShowRestoreNotice = config.getConfiguration().getBoolean("Settings.AnimatedThrottleShowRestoreNotice", false);
         startupCacheWarmupThreads = config.getConfiguration().getInt("Settings.Startup.CacheWarmupThreads", 0);
         startupPersistentColorCache = config.getConfiguration().getBoolean("Settings.Startup.PersistentColorCache", true);
 
