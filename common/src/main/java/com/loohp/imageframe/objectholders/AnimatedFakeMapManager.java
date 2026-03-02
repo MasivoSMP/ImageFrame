@@ -314,7 +314,9 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                     continue;
                 }
                 if (!knownIds.contains(candidate.getMapId())) {
-                    enqueueInitialSend(state, candidate.getImageMap(), pendingIds);
+                    if (!pendingIds.contains(candidate.getMapId())) {
+                        enqueueInitialSend(state, candidate.getImageMap(), pendingIds);
+                    }
                     continue;
                 }
 
