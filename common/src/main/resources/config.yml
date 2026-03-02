@@ -182,6 +182,20 @@ Gui:
       Name: "&aCreate Image"
       Lore: []
       CustomModelData: 0.0
+    ViewAnimatedMapsOn:
+      #Slot 51
+      Material: LIME_DYE
+      Name: "&aAnimated Maps: ON"
+      Lore:
+        - "&7Click to disable animated map updates."
+      CustomModelData: 0.0
+    ViewAnimatedMapsOff:
+      #Slot 51
+      Material: GRAY_DYE
+      Name: "&cAnimated Maps: OFF"
+      Lore:
+        - "&7Click to enable animated map updates."
+      CustomModelData: 0.0
     Close:
       #Shown in the "Back" slot on page 1 (closes the menu)
       Material: BARRIER

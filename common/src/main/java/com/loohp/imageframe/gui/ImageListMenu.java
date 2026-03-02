@@ -22,6 +22,9 @@ package com.loohp.imageframe.gui;
 
 import com.loohp.imageframe.ImageFrame;
 import com.loohp.imageframe.gui.GuiConfig.GuiItemTemplate;
+import com.loohp.imageframe.objectholders.BooleanState;
+import com.loohp.imageframe.objectholders.IFPlayer;
+import com.loohp.imageframe.objectholders.IFPlayerPreference;
 import com.loohp.imageframe.objectholders.ImageMap;
 import com.loohp.platformscheduler.Scheduler;
 import net.kyori.adventure.text.Component;
@@ -50,6 +53,7 @@ public class ImageListMenu {
 
     public static final int SLOT_PREV = 45;
     public static final int SLOT_CREATE = 49;
+    public static final int SLOT_VIEW_ANIMATED_MAPS = 51;
     public static final int SLOT_NEXT = 53;
     public static final int SLOT_LOADING = 48;
 
@@ -93,6 +97,8 @@ public class ImageListMenu {
         GuiItemTemplate nextTemplate = ImageFrame.guiConfig.getListNext();
         GuiItemTemplate nextDisabledTemplate = ImageFrame.guiConfig.getListNextDisabled();
         GuiItemTemplate createTemplate = ImageFrame.guiConfig.getListCreate();
+        GuiItemTemplate viewAnimatedMapsOnTemplate = ImageFrame.guiConfig.getListViewAnimatedMapsOn();
+        GuiItemTemplate viewAnimatedMapsOffTemplate = ImageFrame.guiConfig.getListViewAnimatedMapsOff();
         GuiItemTemplate closeTemplate = ImageFrame.guiConfig.getListClose();
         GuiItemTemplate loadingTemplate = ImageFrame.guiConfig.getListLoading();
 
@@ -112,6 +118,10 @@ public class ImageListMenu {
         inv.setItem(SLOT_PREV, (safePage > 0 ? prevTemplate : closeTemplate).create(Collections.emptyMap()));
         inv.setItem(SLOT_NEXT, (safePage < maxPage ? nextTemplate : nextDisabledTemplate).create(Collections.emptyMap()));
         inv.setItem(SLOT_CREATE, createTemplate.create(Collections.emptyMap()));
+        IFPlayer ifPlayer = ImageFrame.ifPlayerManager.getIFPlayer(viewer.getUniqueId());
+        boolean viewAnimatedMaps = ifPlayer.getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class)
+                .getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(viewer, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true));
+        inv.setItem(SLOT_VIEW_ANIMATED_MAPS, (viewAnimatedMaps ? viewAnimatedMapsOnTemplate : viewAnimatedMapsOffTemplate).create(Collections.emptyMap()));
 
         if (isLoading) {
             inv.setItem(SLOT_LOADING, loadingTemplate.create(titlePlaceholders));

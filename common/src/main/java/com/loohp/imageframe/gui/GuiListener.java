@@ -21,6 +21,9 @@
 package com.loohp.imageframe.gui;
 
 import com.loohp.imageframe.ImageFrame;
+import com.loohp.imageframe.objectholders.BooleanState;
+import com.loohp.imageframe.objectholders.IFPlayer;
+import com.loohp.imageframe.objectholders.IFPlayerPreference;
 import com.loohp.imageframe.objectholders.ImageMap;
 import com.loohp.imageframe.objectholders.ImageMapAccessPermissionType;
 import com.loohp.imageframe.utils.MapUtils;
@@ -49,6 +52,9 @@ import static com.loohp.imageframe.language.TranslationKey.IMAGE_MAP_DELETED;
 import static com.loohp.imageframe.language.TranslationKey.IMAGE_MAP_RENAMED;
 import static com.loohp.imageframe.language.TranslationKey.INVALID_IMAGE_MAP;
 import static com.loohp.imageframe.language.TranslationKey.NO_PERMISSION;
+import static com.loohp.imageframe.language.TranslationKey.PREFERENCES_TYPE;
+import static com.loohp.imageframe.language.TranslationKey.PREFERENCES_UPDATE;
+import static com.loohp.imageframe.language.TranslationKey.PREFERENCES_VALUE;
 import static com.loohp.imageframe.utils.CommandSenderUtils.sendMessage;
 import static net.kyori.adventure.text.Component.translatable;
 
@@ -251,6 +257,16 @@ public class GuiListener implements Listener {
             player.closeInventory();
             String playerName = player.getName();
             Scheduler.runTaskLater(ImageFrame.plugin, () -> Bukkit.dispatchCommand(Bukkit.getConsoleSender(), "dialog open imageframe_create " + playerName), 3);
+        } else if (rawSlot == ImageListMenu.SLOT_VIEW_ANIMATED_MAPS) {
+            IFPlayer ifPlayer = ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId());
+            boolean currentValue = ifPlayer.getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class)
+                    .getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true));
+            BooleanState nextValue = currentValue ? BooleanState.FALSE : BooleanState.TRUE;
+            ifPlayer.setPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, nextValue);
+            sendMessage(player, translatable(PREFERENCES_UPDATE,
+                    translatable(PREFERENCES_TYPE(IFPlayerPreference.VIEW_ANIMATED_MAPS)).fallback(IFPlayerPreference.VIEW_ANIMATED_MAPS.name()).color(NamedTextColor.WHITE),
+                    translatable(PREFERENCES_VALUE(nextValue)).fallback(nextValue.name()).color(nextValue.getDisplayColor())).color(NamedTextColor.YELLOW));
+            ImageListMenu.open(player, holder.getOwnerUuid(), holder.getOwnerName(), holder.getPage());
         }
     }
 
