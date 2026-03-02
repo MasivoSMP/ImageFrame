@@ -5,6 +5,8 @@
   "imageframe.messages.image_map_processing": "ImageMap is being processed, please wait!",
   "imageframe.messages.image_map_processing_action_bar": "ImageMap %1$s is being processed%2$s",
   "imageframe.messages.image_map_queued_action_bar": "ImageMap %1$s is currently queued (%2$s Remaining)",
+  "imageframe.messages.animated_updates_throttled_action_bar": "Nearby animated images have been throttled to improve performance.",
+  "imageframe.messages.animated_updates_restored_action_bar": "Nearby animated images are back to normal update speed.",
   "imageframe.messages.image_map_created": "ImageMap has been created!",
   "imageframe.messages.image_map_refreshed": "ImageMap has been refreshed!",
   "imageframe.messages.image_map_deleted": "ImageMap had been deleted!",

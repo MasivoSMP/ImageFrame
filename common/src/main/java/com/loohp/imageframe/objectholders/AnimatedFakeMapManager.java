@@ -21,16 +21,22 @@
 package com.loohp.imageframe.objectholders;
 
 import com.loohp.imageframe.ImageFrame;
+import com.loohp.imageframe.api.events.ImageMapDeletedEvent;
 import com.loohp.imageframe.api.events.ImageMapUpdatedEvent;
 import com.loohp.imageframe.hooks.viaversion.ViaHook;
+import com.loohp.imageframe.language.TranslationKey;
 import com.loohp.imageframe.nms.NMS;
+import com.loohp.imageframe.utils.CommandSenderUtils;
 import com.loohp.imageframe.utils.FakeItemUtils;
 import com.loohp.imageframe.utils.MapUtils;
 import com.loohp.imageframe.utils.ModernEventsUtils;
 import com.loohp.platformscheduler.Scheduler;
 import com.loohp.platformscheduler.platform.folia.FoliaScheduler;
+import net.kyori.adventure.text.Component;
+import net.md_5.bungee.api.ChatMessageType;
 import org.bukkit.Bukkit;
 import org.bukkit.Chunk;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.entity.Entity;
@@ -54,14 +60,15 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -71,11 +78,13 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
     private final Map<UUID, TrackedItemFrameData> itemFrames;
     private final Map<Player, Set<Integer>> knownMapIds;
     private final Map<Player, Set<Integer>> pendingKnownMapIds;
+    private final Map<Player, PlayerAnimationState> playerStates;
 
     public AnimatedFakeMapManager() {
         this.itemFrames = new ConcurrentHashMap<>();
         this.knownMapIds = new ConcurrentHashMap<>();
         this.pendingKnownMapIds = new ConcurrentHashMap<>();
+        this.playerStates = new ConcurrentHashMap<>();
         Scheduler.runTaskTimerAsynchronously(ImageFrame.plugin, this, 0, 1);
         Bukkit.getPluginManager().registerEvents(this, ImageFrame.plugin);
         if (ModernEventsUtils.modernEventsExists()) {
@@ -91,6 +100,7 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         for (Player player : Bukkit.getOnlinePlayers()) {
             knownMapIds.put(player, ConcurrentHashMap.newKeySet());
             pendingKnownMapIds.put(player, ConcurrentHashMap.newKeySet());
+            playerStates.put(player, new PlayerAnimationState());
         }
     }
 
@@ -115,7 +125,15 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                         } else {
                             trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
                         }
-                        future.complete(new ItemFrameInfo(itemFrame.getEntityId(), trackedPlayers, itemFrame.getItem()));
+                        Location location = itemFrame.getLocation();
+                        future.complete(new ItemFrameInfo(
+                                itemFrame.getEntityId(),
+                                trackedPlayers,
+                                itemFrame.getItem(),
+                                location.getWorld() == null ? null : location.getWorld().getUID(),
+                                location.getX(),
+                                location.getY(),
+                                location.getZ()));
                     } else {
                         future.complete(null);
                     }
@@ -133,10 +151,16 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         return futures;
     }
 
+    @Override
     public void run() {
         Map<UUID, CompletableFuture<ItemFrameInfo>> entityTrackers = collectItemFramesInfo(!ImageFrame.handleAnimatedMapsOnMainThread);
-        Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> updateData = new HashMap<>();
+        List<FrameUpdateCandidate> candidates = new ArrayList<>();
+        Map<Player, Set<Integer>> imagesWithinEnterByPlayer = new HashMap<>();
+        Map<Player, Set<Integer>> imagesWithinExitByPlayer = new HashMap<>();
+        Map<Player, PlayerLocationInfo> playerLocationInfo = new HashMap<>();
+        Map<Player, Boolean> viewAnimatedCache = new HashMap<>();
         long deadline = System.currentTimeMillis() + 2000;
+
         for (Map.Entry<UUID, CompletableFuture<ItemFrameInfo>> entry : entityTrackers.entrySet()) {
             UUID uuid = entry.getKey();
             ItemFrameInfo frameInfo;
@@ -150,14 +174,14 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                 continue;
             }
 
-            int entityId = frameInfo.getEntityId();
-            Set<Player> players = frameInfo.getTrackedPlayers();
-            ItemStack itemStack = frameInfo.getItemStack();
-
             TrackedItemFrameData data = itemFrames.get(uuid);
             if (data == null) {
                 continue;
             }
+
+            int entityId = frameInfo.getEntityId();
+            Set<Player> trackedPlayers = frameInfo.getTrackedPlayers();
+            ItemStack itemStack = frameInfo.getItemStack();
 
             AnimationData animationData = data.getAnimationData();
             MapView mapView = MapUtils.getItemMapView(itemStack);
@@ -176,86 +200,161 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                     continue;
                 }
                 data.setAnimationData(animationData = new AnimationData(map, mapView, map.getMapViews().indexOf(mapView)));
-            } else if (!animationData.isEmpty()) {
-                if (!animationData.getImageMap().isValid()) {
-                    for (Player player : players) {
-                        FakeItemUtils.sendFakeItemChange(player, entityId, itemStack);
-                    }
-                    data.setAnimationData(AnimationData.EMPTY);
-                    continue;
+            } else if (!animationData.isEmpty() && !animationData.getImageMap().isValid()) {
+                for (Player player : trackedPlayers) {
+                    FakeItemUtils.sendFakeItemChange(player, entityId, itemStack);
                 }
+                data.setAnimationData(AnimationData.EMPTY);
+                continue;
             }
-            ImageMap imageMap = animationData.getImageMap();
 
+            ImageMap imageMap = animationData.getImageMap();
             if (!imageMap.requiresAnimationService()) {
                 data.setAnimationData(AnimationData.EMPTY);
                 continue;
             }
+
             int index = animationData.getIndex();
             int currentPosition = imageMap.getCurrentPositionInSequenceWithOffset();
             int mapId = imageMap.getAnimationFakeMapId(currentPosition, index, imageMap.isAnimationPaused());
-            if (mapId < 0) {
+            if (mapId < 0 || frameInfo.getWorldUUID() == null) {
                 continue;
             }
-            Set<Player> requiresSending = new HashSet<>();
-            Set<Player> needReset = new HashSet<>();
-            for (Iterator<Player> itr = players.iterator(); itr.hasNext();) {
-                Player player = itr.next();
-                MapMarkerEditManager.MapMarkerEditData edit = ImageFrame.mapMarkerEditManager.getActiveEditing(player);
-                if (edit != null && Objects.equals(edit.getImageMap(), imageMap)) {
-                    needReset.add(player);
-                    itr.remove();
+
+            candidates.add(new FrameUpdateCandidate(
+                    imageMap,
+                    imageMap.getImageIndex(),
+                    mapId,
+                    currentPosition,
+                    mapView,
+                    entityId,
+                    itemStack,
+                    trackedPlayers,
+                    frameInfo.getWorldUUID(),
+                    frameInfo.getX(),
+                    frameInfo.getY(),
+                    frameInfo.getZ()));
+        }
+
+        double enterDistance = Math.max(0, ImageFrame.animatedUpdateDistanceBlocks);
+        double exitDistance = enterDistance + Math.max(0, ImageFrame.animatedUpdateDistanceHysteresisBlocks);
+        double enterDistanceSq = enterDistance * enterDistance;
+        double exitDistanceSq = exitDistance * exitDistance;
+
+        for (FrameUpdateCandidate candidate : candidates) {
+            for (Player player : candidate.getTrackedPlayers()) {
+                if (!player.isOnline()) {
                     continue;
                 }
-                Set<Integer> knownIds = knownMapIds.get(player);
-                Set<Integer> pendingKnownIds = pendingKnownMapIds.get(player);
-                if (knownIds != null && !knownIds.contains(mapId)) {
-                    if (pendingKnownIds != null && !pendingKnownIds.contains(mapId)) {
-                        Set<Integer> fakeMapIds = imageMap.getFakeMapIds();
-                        if (fakeMapIds != null) {
-                            pendingKnownIds.addAll(fakeMapIds);
-                            requiresSending.add(player);
-                        }
-                    }
-                    itr.remove();
+                PlayerLocationInfo playerLoc = playerLocationInfo.computeIfAbsent(player, PlayerLocationInfo::fromPlayer);
+                if (playerLoc == null || !candidate.getWorldUUID().equals(playerLoc.getWorldUUID())) {
+                    continue;
                 }
-            }
-            if (!requiresSending.isEmpty()) {
-                imageMap.sendAnimationFakeMaps(requiresSending, (p, i, r) -> {
-                    Set<Integer> pendingKnownIds = pendingKnownMapIds.get(p);
-                    if (pendingKnownIds != null && pendingKnownIds.remove(i) && r) {
-                        Set<Integer> knownIds = knownMapIds.get(p);
-                        if (knownIds != null) {
-                            knownIds.add(i);
-                        }
-                    }
-                });
-            }
-            if (!needReset.isEmpty()) {
-                FakeItemUtils.ItemFrameUpdateData itemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(entityId, itemStack, mapView.getId(), mapView, currentPosition);
-                needReset.forEach(p -> updateData.computeIfAbsent(p, k -> new ArrayList<>()).add(itemFrameUpdateData));
-            }
-            FakeItemUtils.ItemFrameUpdateData itemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(entityId, getMapItem(mapId), mapView.getId(), mapView, currentPosition);
-            players.forEach(p -> updateData.computeIfAbsent(p, k -> new ArrayList<>()).add(itemFrameUpdateData));
-        }
-        Map<Player, List<Runnable>> sendingTasks = new HashMap<>();
-        for (Map.Entry<Player, List<FakeItemUtils.ItemFrameUpdateData>> entry : updateData.entrySet()) {
-            Player player = entry.getKey();
-            if (ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId()).getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class).getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true))) {
-                if (ImageFrame.viaHook && ViaHook.isPlayerLegacy(player)) {
-                    if (!ImageFrame.viaDisableSmoothAnimationForLegacyPlayers) {
-                        List<FakeItemUtils.ItemFrameUpdateData> list = entry.getValue();
-                        for (FakeItemUtils.ItemFrameUpdateData data : list) {
-                            sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> MapUtils.sendImageMap(data.getRealMapId(), data.getMapView(), data.getCurrentPosition(), Collections.singleton(player), true));
-                        }
-                    }
-                } else {
-                    sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> FakeItemUtils.sendFakeItemChange(player, entry.getValue()));
+                double distanceSq = distanceSquared(playerLoc.getX(), playerLoc.getY(), playerLoc.getZ(), candidate.getX(), candidate.getY(), candidate.getZ());
+                if (distanceSq <= exitDistanceSq) {
+                    imagesWithinExitByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
+                }
+                if (distanceSq <= enterDistanceSq) {
+                    imagesWithinEnterByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
                 }
             }
         }
+
         for (Player player : Bukkit.getOnlinePlayers()) {
-            if (ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId()).getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class).getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true))) {
+            PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
+            Set<Integer> previousInRange = new HashSet<>(state.getInRangeAnimatedImageIds());
+            Set<Integer> withinEnter = imagesWithinEnterByPlayer.getOrDefault(player, Collections.emptySet());
+            Set<Integer> withinExit = imagesWithinExitByPlayer.getOrDefault(player, Collections.emptySet());
+
+            state.getInRangeAnimatedImageIds().clear();
+            state.getInRangeAnimatedImageIds().addAll(withinEnter);
+            for (Integer imageIndex : previousInRange) {
+                if (withinExit.contains(imageIndex)) {
+                    state.getInRangeAnimatedImageIds().add(imageIndex);
+                }
+            }
+        }
+
+        Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> throttledUpdateData = new HashMap<>();
+        Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> resetUpdateData = new HashMap<>();
+        Map<Player, Set<Integer>> activeAnimatedImageIds = new HashMap<>();
+
+        for (FrameUpdateCandidate candidate : candidates) {
+            FakeItemUtils.ItemFrameUpdateData throttledItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
+                    candidate.getEntityId(),
+                    getMapItem(candidate.getMapId()),
+                    candidate.getMapView().getId(),
+                    candidate.getMapView(),
+                    candidate.getCurrentPosition());
+            FakeItemUtils.ItemFrameUpdateData resetItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
+                    candidate.getEntityId(),
+                    candidate.getItemStack(),
+                    candidate.getMapView().getId(),
+                    candidate.getMapView(),
+                    candidate.getCurrentPosition());
+
+            for (Player player : candidate.getTrackedPlayers()) {
+                if (!canViewAnimated(player, viewAnimatedCache)) {
+                    continue;
+                }
+                PlayerAnimationState state = playerStates.get(player);
+                if (state == null || !state.getInRangeAnimatedImageIds().contains(candidate.getImageIndex())) {
+                    continue;
+                }
+
+                MapMarkerEditManager.MapMarkerEditData edit = ImageFrame.mapMarkerEditManager.getActiveEditing(player);
+                if (edit != null && Objects.equals(edit.getImageMap(), candidate.getImageMap())) {
+                    resetUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(resetItemFrameUpdateData);
+                    continue;
+                }
+
+                Set<Integer> knownIds = knownMapIds.get(player);
+                Set<Integer> pendingIds = pendingKnownMapIds.get(player);
+                if (knownIds == null || pendingIds == null) {
+                    continue;
+                }
+                if (!knownIds.contains(candidate.getMapId())) {
+                    if (!pendingIds.contains(candidate.getMapId())) {
+                        enqueueInitialSend(state, candidate.getImageMap(), pendingIds);
+                    }
+                    continue;
+                }
+
+                throttledUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(throttledItemFrameUpdateData);
+                activeAnimatedImageIds.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
+            }
+        }
+
+        long now = System.currentTimeMillis();
+        for (Map.Entry<Player, PlayerAnimationState> entry : playerStates.entrySet()) {
+            Player player = entry.getKey();
+            PlayerAnimationState state = entry.getValue();
+            if (!player.isOnline() || now < state.getNextInitialSendAtMs()) {
+                continue;
+            }
+            processInitialSendQueue(player, state, now);
+        }
+
+        Map<Player, Boolean> allowThrottledUpdates = new HashMap<>();
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
+            if (!canViewAnimated(player, viewAnimatedCache)) {
+                state.setThrottleActive(false);
+                continue;
+            }
+            int activeCount = activeAnimatedImageIds.getOrDefault(player, Collections.emptySet()).size();
+            boolean throttleActive = activeCount >= ImageFrame.animatedThrottleStartCount;
+            handleThrottleNotice(player, state, throttleActive, now);
+            int divisor = getThrottleDivisor(activeCount);
+            allowThrottledUpdates.put(player, state.shouldSendThrottled(divisor));
+        }
+
+        Map<Player, List<Runnable>> sendingTasks = new HashMap<>();
+        addSendingTasks(throttledUpdateData, sendingTasks, allowThrottledUpdates, false, viewAnimatedCache);
+        addSendingTasks(resetUpdateData, sendingTasks, allowThrottledUpdates, true, viewAnimatedCache);
+
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            if (canViewAnimated(player, viewAnimatedCache)) {
                 ItemStack mainhand = player.getEquipment().getItemInMainHand();
                 ItemStack offhand = player.getEquipment().getItemInOffHand();
                 MapView mainHandView = MapUtils.getItemMapView(mainhand);
@@ -274,13 +373,161 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                 }
             }
         }
+
         if (ImageFrame.sendAnimatedMapsOnMainThread) {
             for (Map.Entry<Player, List<Runnable>> entry : sendingTasks.entrySet()) {
                 Scheduler.runTask(ImageFrame.plugin, () -> entry.getValue().forEach(Runnable::run), entry.getKey());
             }
         } else {
-            sendingTasks.values().forEach(l -> l.forEach(Runnable::run));
+            sendingTasks.values().forEach(list -> list.forEach(Runnable::run));
         }
+    }
+
+    private void addSendingTasks(Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> updateData, Map<Player, List<Runnable>> sendingTasks, Map<Player, Boolean> allowThrottledUpdates, boolean bypassThrottle, Map<Player, Boolean> viewAnimatedCache) {
+        for (Map.Entry<Player, List<FakeItemUtils.ItemFrameUpdateData>> entry : updateData.entrySet()) {
+            Player player = entry.getKey();
+            if (!canViewAnimated(player, viewAnimatedCache)) {
+                continue;
+            }
+            if (!bypassThrottle && !allowThrottledUpdates.getOrDefault(player, true)) {
+                continue;
+            }
+            if (ImageFrame.viaHook && ViaHook.isPlayerLegacy(player)) {
+                if (!ImageFrame.viaDisableSmoothAnimationForLegacyPlayers) {
+                    List<FakeItemUtils.ItemFrameUpdateData> list = entry.getValue();
+                    for (FakeItemUtils.ItemFrameUpdateData data : list) {
+                        sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(
+                                () -> MapUtils.sendImageMap(data.getRealMapId(), data.getMapView(), data.getCurrentPosition(), Collections.singleton(player), true));
+                    }
+                }
+            } else {
+                sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> FakeItemUtils.sendFakeItemChange(player, entry.getValue()));
+            }
+        }
+    }
+
+    private void processInitialSendQueue(Player player, PlayerAnimationState state, long now) {
+        int attempts = state.getInitialSendQueue().size();
+        for (int i = 0; i < attempts; i++) {
+            Integer imageIndex = state.getInitialSendQueue().poll();
+            if (imageIndex == null) {
+                return;
+            }
+
+            state.getQueuedInitialSendImageIds().remove(imageIndex);
+            Set<Integer> queuedFakeMapIds = state.getQueuedInitialSendFakeMapIds().remove(imageIndex);
+            ImageMap imageMap = ImageFrame.imageMapManager.getFromImageId(imageIndex);
+            if (imageMap == null || !imageMap.isValid() || !imageMap.requiresAnimationService()) {
+                removePendingFakeMapIds(player, queuedFakeMapIds);
+                continue;
+            }
+            if (!state.getInRangeAnimatedImageIds().contains(imageIndex)) {
+                state.getInitialSendQueue().add(imageIndex);
+                state.getQueuedInitialSendImageIds().add(imageIndex);
+                if (queuedFakeMapIds != null && !queuedFakeMapIds.isEmpty()) {
+                    state.getQueuedInitialSendFakeMapIds().put(imageIndex, queuedFakeMapIds);
+                }
+                continue;
+            }
+
+            imageMap.sendAnimationFakeMaps(Collections.singleton(player), (p, mapId, success) -> {
+                Set<Integer> pending = pendingKnownMapIds.get(p);
+                if (pending != null && pending.remove(mapId) && success) {
+                    Set<Integer> known = knownMapIds.get(p);
+                    if (known != null) {
+                        known.add(mapId);
+                    }
+                }
+            });
+            state.setNextInitialSendAtMs(now + ImageFrame.initialSendSpacingMs);
+            return;
+        }
+    }
+
+    private void enqueueInitialSend(PlayerAnimationState state, ImageMap imageMap, Set<Integer> pendingIds) {
+        int imageIndex = imageMap.getImageIndex();
+        if (!state.getQueuedInitialSendImageIds().add(imageIndex)) {
+            return;
+        }
+        Set<Integer> fakeMapIds = imageMap.getFakeMapIds();
+        if (fakeMapIds == null || fakeMapIds.isEmpty()) {
+            state.getQueuedInitialSendImageIds().remove(imageIndex);
+            return;
+        }
+        Set<Integer> copiedFakeMapIds = new HashSet<>(fakeMapIds);
+        state.getInitialSendQueue().add(imageIndex);
+        state.getQueuedInitialSendFakeMapIds().put(imageIndex, copiedFakeMapIds);
+        pendingIds.addAll(copiedFakeMapIds);
+    }
+
+    private void handleThrottleNotice(Player player, PlayerAnimationState state, boolean throttleActive, long now) {
+        if (state.isThrottleActive() == throttleActive) {
+            return;
+        }
+        long cooldown = Math.max(0L, ImageFrame.animatedThrottleNoticeCooldownMs);
+        if (throttleActive) {
+            if (now - state.getLastThrottleNoticeAtMs() >= cooldown) {
+                CommandSenderUtils.sendMessage(player, ChatMessageType.ACTION_BAR, Component.translatable(TranslationKey.ANIMATED_UPDATES_THROTTLED_ACTION_BAR));
+                state.setLastThrottleNoticeAtMs(now);
+            }
+        } else if (ImageFrame.animatedThrottleShowRestoreNotice && now - state.getLastRestoreNoticeAtMs() >= cooldown) {
+            CommandSenderUtils.sendMessage(player, ChatMessageType.ACTION_BAR, Component.translatable(TranslationKey.ANIMATED_UPDATES_RESTORED_ACTION_BAR));
+            state.setLastRestoreNoticeAtMs(now);
+        }
+        state.setThrottleActive(throttleActive);
+    }
+
+    private void removeQueuedImage(PlayerAnimationState state, int imageIndex) {
+        state.getQueuedInitialSendImageIds().remove(imageIndex);
+        state.getQueuedInitialSendFakeMapIds().remove(imageIndex);
+        while (state.getInitialSendQueue().remove(imageIndex)) {
+            // Remove all duplicates if present.
+        }
+        state.getInRangeAnimatedImageIds().remove(imageIndex);
+    }
+
+    private void removeQueuedImageForAllPlayers(int imageIndex) {
+        for (PlayerAnimationState state : playerStates.values()) {
+            removeQueuedImage(state, imageIndex);
+        }
+    }
+
+    private void removePendingFakeMapIds(Player player, Set<Integer> fakeMapIds) {
+        if (fakeMapIds == null || fakeMapIds.isEmpty()) {
+            return;
+        }
+        Set<Integer> pending = pendingKnownMapIds.get(player);
+        if (pending != null) {
+            pending.removeAll(fakeMapIds);
+        }
+    }
+
+    private int getThrottleDivisor(int activeCount) {
+        int startCount = Math.max(1, ImageFrame.animatedThrottleStartCount);
+        if (activeCount < startCount) {
+            return 1;
+        }
+        int shift = Math.min(30, activeCount - startCount + 1);
+        return 1 << shift;
+    }
+
+    private boolean canViewAnimated(Player player, Map<Player, Boolean> cache) {
+        Boolean cached = cache.get(player);
+        if (cached != null) {
+            return cached;
+        }
+        boolean value = ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId())
+                .getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class)
+                .getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true));
+        cache.put(player, value);
+        return value;
+    }
+
+    private static double distanceSquared(double x1, double y1, double z1, double x2, double y2, double z2) {
+        double dx = x1 - x2;
+        double dy = y1 - y2;
+        double dz = z1 - z2;
+        return dx * dx + dy * dy + dz * dz;
     }
 
     @SuppressWarnings("deprecation")
@@ -341,6 +588,7 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
             if (player.isOnline()) {
                 knownMapIds.put(player, ConcurrentHashMap.newKeySet());
                 pendingKnownMapIds.put(player, ConcurrentHashMap.newKeySet());
+                playerStates.put(player, new PlayerAnimationState());
             }
         }, 20, player);
     }
@@ -350,6 +598,7 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         Player player = event.getPlayer();
         knownMapIds.remove(player);
         pendingKnownMapIds.remove(player);
+        playerStates.remove(player);
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -382,6 +631,27 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                     pendingKnownIds.removeAll(ids);
                 }
             }
+            removeQueuedImageForAllPlayers(imageMap.getImageIndex());
+        });
+    }
+
+    @EventHandler
+    public void onImageMapDelete(ImageMapDeletedEvent event) {
+        ImageMap imageMap = event.getImageMap();
+        if (!imageMap.requiresAnimationService()) {
+            return;
+        }
+        Scheduler.runTaskAsynchronously(ImageFrame.plugin, () -> {
+            Set<Integer> ids = imageMap.getFakeMapIds();
+            if (ids != null) {
+                for (Set<Integer> knownIds : knownMapIds.values()) {
+                    knownIds.removeAll(ids);
+                }
+                for (Set<Integer> pendingKnownIds : pendingKnownMapIds.values()) {
+                    pendingKnownIds.removeAll(ids);
+                }
+            }
+            removeQueuedImageForAllPlayers(imageMap.getImageIndex());
         });
     }
 
@@ -456,11 +726,19 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         private final int entityId;
         private final Set<Player> trackedPlayers;
         private final ItemStack itemStack;
+        private final UUID worldUUID;
+        private final double x;
+        private final double y;
+        private final double z;
 
-        public ItemFrameInfo(int entityId, Set<Player> trackedPlayers, ItemStack itemStack) {
+        public ItemFrameInfo(int entityId, Set<Player> trackedPlayers, ItemStack itemStack, UUID worldUUID, double x, double y, double z) {
             this.entityId = entityId;
             this.trackedPlayers = trackedPlayers;
             this.itemStack = itemStack;
+            this.worldUUID = worldUUID;
+            this.x = x;
+            this.y = y;
+            this.z = z;
         }
 
         public int getEntityId() {
@@ -473,6 +751,219 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
 
         public ItemStack getItemStack() {
             return itemStack;
+        }
+
+        public UUID getWorldUUID() {
+            return worldUUID;
+        }
+
+        public double getX() {
+            return x;
+        }
+
+        public double getY() {
+            return y;
+        }
+
+        public double getZ() {
+            return z;
+        }
+    }
+
+    public static class FrameUpdateCandidate {
+
+        private final ImageMap imageMap;
+        private final int imageIndex;
+        private final int mapId;
+        private final int currentPosition;
+        private final MapView mapView;
+        private final int entityId;
+        private final ItemStack itemStack;
+        private final Set<Player> trackedPlayers;
+        private final UUID worldUUID;
+        private final double x;
+        private final double y;
+        private final double z;
+
+        public FrameUpdateCandidate(ImageMap imageMap, int imageIndex, int mapId, int currentPosition, MapView mapView, int entityId, ItemStack itemStack, Set<Player> trackedPlayers, UUID worldUUID, double x, double y, double z) {
+            this.imageMap = imageMap;
+            this.imageIndex = imageIndex;
+            this.mapId = mapId;
+            this.currentPosition = currentPosition;
+            this.mapView = mapView;
+            this.entityId = entityId;
+            this.itemStack = itemStack;
+            this.trackedPlayers = trackedPlayers;
+            this.worldUUID = worldUUID;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        public ImageMap getImageMap() {
+            return imageMap;
+        }
+
+        public int getImageIndex() {
+            return imageIndex;
+        }
+
+        public int getMapId() {
+            return mapId;
+        }
+
+        public int getCurrentPosition() {
+            return currentPosition;
+        }
+
+        public MapView getMapView() {
+            return mapView;
+        }
+
+        public int getEntityId() {
+            return entityId;
+        }
+
+        public ItemStack getItemStack() {
+            return itemStack;
+        }
+
+        public Set<Player> getTrackedPlayers() {
+            return trackedPlayers;
+        }
+
+        public UUID getWorldUUID() {
+            return worldUUID;
+        }
+
+        public double getX() {
+            return x;
+        }
+
+        public double getY() {
+            return y;
+        }
+
+        public double getZ() {
+            return z;
+        }
+    }
+
+    public static class PlayerLocationInfo {
+
+        public static PlayerLocationInfo fromPlayer(Player player) {
+            Location location = player.getLocation();
+            World world = location.getWorld();
+            if (world == null) {
+                return null;
+            }
+            return new PlayerLocationInfo(world.getUID(), location.getX(), location.getY(), location.getZ());
+        }
+
+        private final UUID worldUUID;
+        private final double x;
+        private final double y;
+        private final double z;
+
+        public PlayerLocationInfo(UUID worldUUID, double x, double y, double z) {
+            this.worldUUID = worldUUID;
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
+
+        public UUID getWorldUUID() {
+            return worldUUID;
+        }
+
+        public double getX() {
+            return x;
+        }
+
+        public double getY() {
+            return y;
+        }
+
+        public double getZ() {
+            return z;
+        }
+    }
+
+    public static class PlayerAnimationState {
+
+        private final Set<Integer> inRangeAnimatedImageIds;
+        private final Queue<Integer> initialSendQueue;
+        private final Set<Integer> queuedInitialSendImageIds;
+        private final Map<Integer, Set<Integer>> queuedInitialSendFakeMapIds;
+        private long nextInitialSendAtMs;
+        private long throttleTickCounter;
+        private boolean throttleActive;
+        private long lastThrottleNoticeAtMs;
+        private long lastRestoreNoticeAtMs;
+
+        public PlayerAnimationState() {
+            this.inRangeAnimatedImageIds = ConcurrentHashMap.newKeySet();
+            this.initialSendQueue = new ConcurrentLinkedQueue<>();
+            this.queuedInitialSendImageIds = ConcurrentHashMap.newKeySet();
+            this.queuedInitialSendFakeMapIds = new ConcurrentHashMap<>();
+            this.nextInitialSendAtMs = 0;
+            this.throttleTickCounter = 0;
+            this.throttleActive = false;
+            this.lastThrottleNoticeAtMs = 0;
+            this.lastRestoreNoticeAtMs = 0;
+        }
+
+        public Set<Integer> getInRangeAnimatedImageIds() {
+            return inRangeAnimatedImageIds;
+        }
+
+        public Queue<Integer> getInitialSendQueue() {
+            return initialSendQueue;
+        }
+
+        public Set<Integer> getQueuedInitialSendImageIds() {
+            return queuedInitialSendImageIds;
+        }
+
+        public Map<Integer, Set<Integer>> getQueuedInitialSendFakeMapIds() {
+            return queuedInitialSendFakeMapIds;
+        }
+
+        public long getNextInitialSendAtMs() {
+            return nextInitialSendAtMs;
+        }
+
+        public void setNextInitialSendAtMs(long nextInitialSendAtMs) {
+            this.nextInitialSendAtMs = nextInitialSendAtMs;
+        }
+
+        public boolean shouldSendThrottled(int divisor) {
+            long current = throttleTickCounter++;
+            return divisor <= 1 || (current % divisor) == 0;
+        }
+
+        public boolean isThrottleActive() {
+            return throttleActive;
+        }
+
+        public void setThrottleActive(boolean throttleActive) {
+            this.throttleActive = throttleActive;
+        }
+
+        public long getLastThrottleNoticeAtMs() {
+            return lastThrottleNoticeAtMs;
+        }
+
+        public void setLastThrottleNoticeAtMs(long lastThrottleNoticeAtMs) {
+            this.lastThrottleNoticeAtMs = lastThrottleNoticeAtMs;
+        }
+
+        public long getLastRestoreNoticeAtMs() {
+            return lastRestoreNoticeAtMs;
+        }
+
+        public void setLastRestoreNoticeAtMs(long lastRestoreNoticeAtMs) {
+            this.lastRestoreNoticeAtMs = lastRestoreNoticeAtMs;
         }
     }
 

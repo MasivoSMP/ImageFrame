@@ -51,6 +51,8 @@ public class GuiConfig {
     private final GuiItemTemplate listNext;
     private final GuiItemTemplate listNextDisabled;
     private final GuiItemTemplate listCreate;
+    private final GuiItemTemplate listViewAnimatedMapsOn;
+    private final GuiItemTemplate listViewAnimatedMapsOff;
     private final GuiItemTemplate listClose;
     private final GuiItemTemplate listImageIcon;
     private final GuiItemTemplate listLoading;
@@ -73,6 +75,8 @@ public class GuiConfig {
             GuiItemTemplate listNext,
             GuiItemTemplate listNextDisabled,
             GuiItemTemplate listCreate,
+            GuiItemTemplate listViewAnimatedMapsOn,
+            GuiItemTemplate listViewAnimatedMapsOff,
             GuiItemTemplate listClose,
             GuiItemTemplate listImageIcon,
             GuiItemTemplate listLoading,
@@ -93,6 +97,8 @@ public class GuiConfig {
         this.listNext = listNext;
         this.listNextDisabled = listNextDisabled;
         this.listCreate = listCreate;
+        this.listViewAnimatedMapsOn = listViewAnimatedMapsOn;
+        this.listViewAnimatedMapsOff = listViewAnimatedMapsOff;
         this.listClose = listClose;
         this.listImageIcon = listImageIcon;
         this.listLoading = listLoading;
@@ -129,6 +135,8 @@ public class GuiConfig {
             createButtonSection = legacyRefreshSection == null ? list.createSection("Create") : legacyRefreshSection;
         }
         GuiItemTemplate listCreate = GuiItemTemplate.from(createButtonSection, Material.LIME_DYE, "&aCreate Image");
+        GuiItemTemplate listViewAnimatedMapsOn = GuiItemTemplate.from(section(list, "ViewAnimatedMapsOn"), Material.LIME_DYE, "&aAnimated Maps: ON");
+        GuiItemTemplate listViewAnimatedMapsOff = GuiItemTemplate.from(section(list, "ViewAnimatedMapsOff"), Material.GRAY_DYE, "&cAnimated Maps: OFF");
         GuiItemTemplate listClose = GuiItemTemplate.from(section(list, "Close"), Material.BARRIER, "&cClose");
         GuiItemTemplate listImageIcon = GuiItemTemplate.from(section(list, "ImageIcon"), Material.FILLED_MAP, "&b{Name}");
         GuiItemTemplate listLoading = GuiItemTemplate.from(section(list, "Loading"), Material.RED_STAINED_GLASS_PANE, "&cLoading images...");
@@ -152,6 +160,8 @@ public class GuiConfig {
                 listNext,
                 listNextDisabled,
                 listCreate,
+                listViewAnimatedMapsOn,
+                listViewAnimatedMapsOff,
                 listClose,
                 listImageIcon,
                 listLoading,
@@ -220,6 +230,14 @@ public class GuiConfig {
 
     public GuiItemTemplate getListCreate() {
         return listCreate;
+    }
+
+    public GuiItemTemplate getListViewAnimatedMapsOn() {
+        return listViewAnimatedMapsOn;
+    }
+
+    public GuiItemTemplate getListViewAnimatedMapsOff() {
+        return listViewAnimatedMapsOff;
     }
 
     public GuiItemTemplate getListClose() {
