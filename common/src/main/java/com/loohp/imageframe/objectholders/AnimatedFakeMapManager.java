@@ -30,6 +30,7 @@ import com.loohp.imageframe.utils.CommandSenderUtils;
 import com.loohp.imageframe.utils.FakeItemUtils;
 import com.loohp.imageframe.utils.MapUtils;
 import com.loohp.imageframe.utils.ModernEventsUtils;
+import com.loohp.platformscheduler.ScheduledTask;
 import com.loohp.platformscheduler.Scheduler;
 import com.loohp.platformscheduler.platform.folia.FoliaScheduler;
 import net.kyori.adventure.text.Component;
@@ -44,6 +45,7 @@ import org.bukkit.entity.ItemFrame;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityTeleportEvent;
 import org.bukkit.event.hanging.HangingPlaceEvent;
@@ -55,6 +57,7 @@ import org.bukkit.event.world.EntitiesLoadEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.MapMeta;
 import org.bukkit.map.MapView;
+import org.bukkit.plugin.IllegalPluginAccessException;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -73,22 +76,35 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-public class AnimatedFakeMapManager implements Listener, Runnable {
+public class AnimatedFakeMapManager implements Listener, Runnable, AutoCloseable {
 
     private final Map<UUID, TrackedItemFrameData> itemFrames;
     private final Map<Player, Set<Integer>> knownMapIds;
     private final Map<Player, Set<Integer>> pendingKnownMapIds;
     private final Map<Player, PlayerAnimationState> playerStates;
+    private final Map<UUID, PlayerSnapshot> playerSnapshots;
+    private final Map<UUID, Map<Integer, Integer>> lastSentEntityMapIds;
+    private final ScheduledTask updateTask;
+    private final Listener modernEventsListener;
+    private long serviceTickCounter;
+    private volatile boolean closed;
 
     public AnimatedFakeMapManager() {
         this.itemFrames = new ConcurrentHashMap<>();
         this.knownMapIds = new ConcurrentHashMap<>();
         this.pendingKnownMapIds = new ConcurrentHashMap<>();
         this.playerStates = new ConcurrentHashMap<>();
-        Scheduler.runTaskTimerAsynchronously(ImageFrame.plugin, this, 0, 1);
+        this.playerSnapshots = new ConcurrentHashMap<>();
+        this.lastSentEntityMapIds = new ConcurrentHashMap<>();
+        this.serviceTickCounter = 0;
+        this.closed = false;
+        this.updateTask = Scheduler.runTaskTimerAsynchronously(ImageFrame.plugin, this, 0, 1);
         Bukkit.getPluginManager().registerEvents(this, ImageFrame.plugin);
         if (ModernEventsUtils.modernEventsExists()) {
-            Bukkit.getPluginManager().registerEvents(new ModernEvents(), ImageFrame.plugin);
+            this.modernEventsListener = new ModernEvents();
+            Bukkit.getPluginManager().registerEvents(modernEventsListener, ImageFrame.plugin);
+        } else {
+            this.modernEventsListener = null;
         }
         for (World world : Bukkit.getWorlds()) {
             for (Entity entity : world.getEntities()) {
@@ -101,29 +117,56 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
             knownMapIds.put(player, ConcurrentHashMap.newKeySet());
             pendingKnownMapIds.put(player, ConcurrentHashMap.newKeySet());
             playerStates.put(player, new PlayerAnimationState());
+            playerSnapshots.put(player.getUniqueId(), new PlayerSnapshot(player, null, 0, 0, 0, false, null, null));
         }
     }
 
-    private Map<UUID, CompletableFuture<ItemFrameInfo>> collectItemFramesInfo(boolean async) {
+    private boolean isOperational() {
+        return !closed && ImageFrame.plugin.isEnabled();
+    }
+
+    private boolean shouldCollectFrameInfo(UUID uuid, TrackedItemFrameData data, long serviceTick) {
+        AnimationData animationData = data.getAnimationData();
+        if (!animationData.isEmpty()) {
+            return true;
+        }
+        int interval = Math.max(1, ImageFrame.nonAnimatedFrameRescanTicks);
+        return Math.floorMod(uuid.hashCode(), interval) == Math.floorMod(serviceTick, interval);
+    }
+
+    private Map<UUID, CompletableFuture<ItemFrameInfo>> collectItemFramesInfo(boolean async, long serviceTick) {
+        if (!isOperational()) {
+            return Collections.emptyMap();
+        }
         boolean isFolia = Scheduler.getPlatform() instanceof FoliaScheduler;
         Map<UUID, CompletableFuture<ItemFrameInfo>> futures = new HashMap<>();
         for (Map.Entry<UUID, TrackedItemFrameData> entry : itemFrames.entrySet()) {
+            if (!isOperational()) {
+                break;
+            }
             UUID uuid = entry.getKey();
-            ItemFrame itemFrame = entry.getValue().getItemFrame();
+            TrackedItemFrameData trackedData = entry.getValue();
+            if (!shouldCollectFrameInfo(uuid, trackedData, serviceTick)) {
+                continue;
+            }
+            ItemFrame itemFrame = trackedData.getItemFrame();
+            boolean prefetchTrackedPlayers = !trackedData.getAnimationData().isEmpty();
             CompletableFuture<ItemFrameInfo> future = new CompletableFuture<>();
             Runnable task = () -> {
                 try {
                     if (itemFrame.isValid()) {
-                        Set<Player> trackedPlayers;
-                        if (isFolia) {
-                            try {
-                                //noinspection deprecation
-                                trackedPlayers = itemFrame.getTrackedPlayers();
-                            } catch (Throwable e) {
+                        Set<Player> trackedPlayers = null;
+                        if (prefetchTrackedPlayers) {
+                            if (isFolia) {
+                                try {
+                                    //noinspection deprecation
+                                    trackedPlayers = itemFrame.getTrackedPlayers();
+                                } catch (Throwable e) {
+                                    trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
+                                }
+                            } else {
                                 trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
                             }
-                        } else {
-                            trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
                         }
                         Location location = itemFrame.getLocation();
                         future.complete(new ItemFrameInfo(
@@ -144,7 +187,15 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
             if (async && !isFolia) {
                 task.run();
             } else {
-                Scheduler.executeOrScheduleSync(ImageFrame.plugin, task, itemFrame);
+                if (!isOperational()) {
+                    future.complete(null);
+                } else {
+                    try {
+                        Scheduler.executeOrScheduleSync(ImageFrame.plugin, task, itemFrame);
+                    } catch (IllegalPluginAccessException e) {
+                        future.complete(null);
+                    }
+                }
             }
             futures.put(uuid, future);
         }
@@ -153,255 +204,448 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
 
     @Override
     public void run() {
-        Map<UUID, CompletableFuture<ItemFrameInfo>> entityTrackers = collectItemFramesInfo(!ImageFrame.handleAnimatedMapsOnMainThread);
-        List<FrameUpdateCandidate> candidates = new ArrayList<>();
-        Map<Player, Set<Integer>> imagesWithinEnterByPlayer = new HashMap<>();
-        Map<Player, Set<Integer>> imagesWithinExitByPlayer = new HashMap<>();
-        Map<Player, PlayerLocationInfo> playerLocationInfo = new HashMap<>();
-        Map<Player, Boolean> viewAnimatedCache = new HashMap<>();
-        long deadline = System.currentTimeMillis() + 2000;
+        if (!isOperational()) {
+            return;
+        }
+        long serviceTick = serviceTickCounter++;
+        int serviceInterval = Math.max(1, ImageFrame.animatedServiceTickInterval);
+        if (Math.floorMod(serviceTick, serviceInterval) != 0) {
+            return;
+        }
+        try {
+            long deadline = System.currentTimeMillis() + 2000;
+            Map<Player, PlayerSnapshot> snapshotByPlayer = collectPlayerSnapshots(deadline, serviceTick);
+            Map<UUID, CompletableFuture<ItemFrameInfo>> entityTrackers = collectItemFramesInfo(!ImageFrame.handleAnimatedMapsOnMainThread, serviceTick);
+            List<FrameUpdateCandidate> candidates = new ArrayList<>();
+            Map<Player, Set<Integer>> imagesWithinEnterByPlayer = new HashMap<>();
+            Map<Player, Set<Integer>> imagesWithinExitByPlayer = new HashMap<>();
 
-        for (Map.Entry<UUID, CompletableFuture<ItemFrameInfo>> entry : entityTrackers.entrySet()) {
-            UUID uuid = entry.getKey();
-            ItemFrameInfo frameInfo;
-            try {
-                frameInfo = entry.getValue().get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
-            } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                frameInfo = null;
-            }
-            if (frameInfo == null) {
-                itemFrames.remove(uuid);
-                continue;
-            }
+            for (Map.Entry<UUID, CompletableFuture<ItemFrameInfo>> entry : entityTrackers.entrySet()) {
+                UUID uuid = entry.getKey();
+                ItemFrameInfo frameInfo;
+                try {
+                    frameInfo = entry.getValue().get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                    frameInfo = null;
+                }
+                if (frameInfo == null) {
+                    itemFrames.remove(uuid);
+                    continue;
+                }
 
-            TrackedItemFrameData data = itemFrames.get(uuid);
-            if (data == null) {
-                continue;
-            }
+                TrackedItemFrameData data = itemFrames.get(uuid);
+                if (data == null) {
+                    continue;
+                }
 
-            int entityId = frameInfo.getEntityId();
-            Set<Player> trackedPlayers = frameInfo.getTrackedPlayers();
-            ItemStack itemStack = frameInfo.getItemStack();
+                ItemFrame itemFrame = data.getItemFrame();
+                int entityId = frameInfo.getEntityId();
+                ItemStack itemStack = frameInfo.getItemStack();
 
-            AnimationData animationData = data.getAnimationData();
-            MapView mapView = MapUtils.getItemMapView(itemStack);
+                AnimationData animationData = data.getAnimationData();
+                MapView mapView = MapUtils.getItemMapView(itemStack);
 
-            if (mapView == null) {
-                data.setAnimationData(AnimationData.EMPTY);
-                continue;
-            }
+                if (mapView == null) {
+                    data.setAnimationData(AnimationData.EMPTY);
+                    continue;
+                }
 
-            if (animationData.isEmpty() || !animationData.getMapView().equals(mapView)) {
-                ImageMap map = ImageFrame.imageMapManager.getFromMapView(mapView);
-                if (map == null || !map.requiresAnimationService()) {
-                    if (!animationData.isEmpty()) {
-                        data.setAnimationData(AnimationData.EMPTY);
+                if (animationData.isEmpty() || !animationData.getMapView().equals(mapView)) {
+                    ImageMap map = ImageFrame.imageMapManager.getFromMapView(mapView);
+                    if (map == null || !map.requiresAnimationService()) {
+                        if (!animationData.isEmpty()) {
+                            data.setAnimationData(AnimationData.EMPTY);
+                        }
+                        continue;
                     }
-                    continue;
-                }
-                data.setAnimationData(animationData = new AnimationData(map, mapView, map.getMapViews().indexOf(mapView)));
-            } else if (!animationData.isEmpty() && !animationData.getImageMap().isValid()) {
-                for (Player player : trackedPlayers) {
-                    FakeItemUtils.sendFakeItemChange(player, entityId, itemStack);
-                }
-                data.setAnimationData(AnimationData.EMPTY);
-                continue;
-            }
-
-            ImageMap imageMap = animationData.getImageMap();
-            if (!imageMap.requiresAnimationService()) {
-                data.setAnimationData(AnimationData.EMPTY);
-                continue;
-            }
-
-            int index = animationData.getIndex();
-            int currentPosition = imageMap.getCurrentPositionInSequenceWithOffset();
-            int mapId = imageMap.getAnimationFakeMapId(currentPosition, index, imageMap.isAnimationPaused());
-            if (mapId < 0 || frameInfo.getWorldUUID() == null) {
-                continue;
-            }
-
-            candidates.add(new FrameUpdateCandidate(
-                    imageMap,
-                    imageMap.getImageIndex(),
-                    mapId,
-                    currentPosition,
-                    mapView,
-                    entityId,
-                    itemStack,
-                    trackedPlayers,
-                    frameInfo.getWorldUUID(),
-                    frameInfo.getX(),
-                    frameInfo.getY(),
-                    frameInfo.getZ()));
-        }
-
-        double enterDistance = Math.max(0, ImageFrame.animatedUpdateDistanceBlocks);
-        double exitDistance = enterDistance + Math.max(0, ImageFrame.animatedUpdateDistanceHysteresisBlocks);
-        double enterDistanceSq = enterDistance * enterDistance;
-        double exitDistanceSq = exitDistance * exitDistance;
-
-        for (FrameUpdateCandidate candidate : candidates) {
-            for (Player player : candidate.getTrackedPlayers()) {
-                if (!player.isOnline()) {
-                    continue;
-                }
-                PlayerLocationInfo playerLoc = playerLocationInfo.computeIfAbsent(player, PlayerLocationInfo::fromPlayer);
-                if (playerLoc == null || !candidate.getWorldUUID().equals(playerLoc.getWorldUUID())) {
-                    continue;
-                }
-                double distanceSq = distanceSquared(playerLoc.getX(), playerLoc.getY(), playerLoc.getZ(), candidate.getX(), candidate.getY(), candidate.getZ());
-                if (distanceSq <= exitDistanceSq) {
-                    imagesWithinExitByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
-                }
-                if (distanceSq <= enterDistanceSq) {
-                    imagesWithinEnterByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
-                }
-            }
-        }
-
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
-            Set<Integer> previousInRange = new HashSet<>(state.getInRangeAnimatedImageIds());
-            Set<Integer> withinEnter = imagesWithinEnterByPlayer.getOrDefault(player, Collections.emptySet());
-            Set<Integer> withinExit = imagesWithinExitByPlayer.getOrDefault(player, Collections.emptySet());
-
-            state.getInRangeAnimatedImageIds().clear();
-            state.getInRangeAnimatedImageIds().addAll(withinEnter);
-            for (Integer imageIndex : previousInRange) {
-                if (withinExit.contains(imageIndex)) {
-                    state.getInRangeAnimatedImageIds().add(imageIndex);
-                }
-            }
-        }
-
-        Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> throttledUpdateData = new HashMap<>();
-        Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> resetUpdateData = new HashMap<>();
-        Map<Player, Set<Integer>> activeAnimatedImageIds = new HashMap<>();
-
-        for (FrameUpdateCandidate candidate : candidates) {
-            FakeItemUtils.ItemFrameUpdateData throttledItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
-                    candidate.getEntityId(),
-                    getMapItem(candidate.getMapId()),
-                    candidate.getMapView().getId(),
-                    candidate.getMapView(),
-                    candidate.getCurrentPosition());
-            FakeItemUtils.ItemFrameUpdateData resetItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
-                    candidate.getEntityId(),
-                    candidate.getItemStack(),
-                    candidate.getMapView().getId(),
-                    candidate.getMapView(),
-                    candidate.getCurrentPosition());
-
-            for (Player player : candidate.getTrackedPlayers()) {
-                if (!canViewAnimated(player, viewAnimatedCache)) {
-                    continue;
-                }
-                PlayerAnimationState state = playerStates.get(player);
-                if (state == null || !state.getInRangeAnimatedImageIds().contains(candidate.getImageIndex())) {
-                    continue;
-                }
-
-                MapMarkerEditManager.MapMarkerEditData edit = ImageFrame.mapMarkerEditManager.getActiveEditing(player);
-                if (edit != null && Objects.equals(edit.getImageMap(), candidate.getImageMap())) {
-                    resetUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(resetItemFrameUpdateData);
-                    continue;
-                }
-
-                Set<Integer> knownIds = knownMapIds.get(player);
-                Set<Integer> pendingIds = pendingKnownMapIds.get(player);
-                if (knownIds == null || pendingIds == null) {
-                    continue;
-                }
-                if (!knownIds.contains(candidate.getMapId())) {
-                    if (!pendingIds.contains(candidate.getMapId())) {
-                        enqueueInitialSend(state, candidate.getImageMap(), pendingIds);
+                    data.setAnimationData(animationData = new AnimationData(map, mapView, map.getMapViews().indexOf(mapView)));
+                } else if (!animationData.isEmpty() && !animationData.getImageMap().isValid()) {
+                    Set<Player> trackedPlayers = frameInfo.getTrackedPlayers();
+                    if (trackedPlayers == null) {
+                        trackedPlayers = collectTrackedPlayers(itemFrame, !ImageFrame.handleAnimatedMapsOnMainThread, deadline);
                     }
+                    for (Player player : trackedPlayers) {
+                        FakeItemUtils.sendFakeItemChange(player, entityId, itemStack);
+                    }
+                    data.setAnimationData(AnimationData.EMPTY);
                     continue;
                 }
 
-                throttledUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(throttledItemFrameUpdateData);
-                activeAnimatedImageIds.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
-            }
-        }
-
-        long now = System.currentTimeMillis();
-        for (Map.Entry<Player, PlayerAnimationState> entry : playerStates.entrySet()) {
-            Player player = entry.getKey();
-            PlayerAnimationState state = entry.getValue();
-            if (!player.isOnline() || now < state.getNextInitialSendAtMs()) {
-                continue;
-            }
-            processInitialSendQueue(player, state, now);
-        }
-
-        Map<Player, Boolean> allowThrottledUpdates = new HashMap<>();
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
-            if (!canViewAnimated(player, viewAnimatedCache)) {
-                state.setThrottleActive(false);
-                continue;
-            }
-            int activeCount = activeAnimatedImageIds.getOrDefault(player, Collections.emptySet()).size();
-            boolean throttleActive = activeCount >= ImageFrame.animatedThrottleStartCount;
-            handleThrottleNotice(player, state, throttleActive, now);
-            int divisor = getThrottleDivisor(activeCount);
-            allowThrottledUpdates.put(player, state.shouldSendThrottled(divisor));
-        }
-
-        Map<Player, List<Runnable>> sendingTasks = new HashMap<>();
-        addSendingTasks(throttledUpdateData, sendingTasks, allowThrottledUpdates, false, viewAnimatedCache);
-        addSendingTasks(resetUpdateData, sendingTasks, allowThrottledUpdates, true, viewAnimatedCache);
-
-        for (Player player : Bukkit.getOnlinePlayers()) {
-            if (canViewAnimated(player, viewAnimatedCache)) {
-                ItemStack mainhand = player.getEquipment().getItemInMainHand();
-                ItemStack offhand = player.getEquipment().getItemInOffHand();
-                MapView mainHandView = MapUtils.getItemMapView(mainhand);
-                MapView offhandView = MapUtils.getItemMapView(offhand);
-                if (mainHandView != null) {
-                    ImageMap mainHandMap = ImageFrame.imageMapManager.getFromMapView(mainHandView);
-                    if (mainHandMap != null && mainHandMap.requiresAnimationService()) {
-                        sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> mainHandMap.send(player));
-                    }
+                ImageMap imageMap = animationData.getImageMap();
+                if (!imageMap.requiresAnimationService()) {
+                    data.setAnimationData(AnimationData.EMPTY);
+                    continue;
                 }
-                if (offhandView != null && !offhandView.equals(mainHandView)) {
-                    ImageMap offHandMap = ImageFrame.imageMapManager.getFromMapView(offhandView);
-                    if (offHandMap != null && offHandMap.requiresAnimationService()) {
-                        sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> offHandMap.send(player));
+
+                int index = animationData.getIndex();
+                int currentPosition = imageMap.getCurrentPositionInSequenceWithOffset();
+                int mapId = imageMap.getAnimationFakeMapId(currentPosition, index, imageMap.isAnimationPaused());
+                if (mapId < 0 || frameInfo.getWorldUUID() == null) {
+                    continue;
+                }
+
+                Set<Player> trackedPlayers = frameInfo.getTrackedPlayers();
+                if (trackedPlayers == null) {
+                    trackedPlayers = collectTrackedPlayers(itemFrame, !ImageFrame.handleAnimatedMapsOnMainThread, deadline);
+                }
+                if (trackedPlayers.isEmpty()) {
+                    continue;
+                }
+
+                candidates.add(new FrameUpdateCandidate(
+                        imageMap,
+                        imageMap.getImageIndex(),
+                        mapId,
+                        currentPosition,
+                        mapView,
+                        entityId,
+                        itemStack,
+                        trackedPlayers,
+                        frameInfo.getWorldUUID(),
+                        frameInfo.getX(),
+                        frameInfo.getY(),
+                        frameInfo.getZ()));
+            }
+
+            double enterDistance = Math.max(0, ImageFrame.animatedUpdateDistanceBlocks);
+            double exitDistance = enterDistance + Math.max(0, ImageFrame.animatedUpdateDistanceHysteresisBlocks);
+            double enterDistanceSq = enterDistance * enterDistance;
+            double exitDistanceSq = exitDistance * exitDistance;
+
+            for (FrameUpdateCandidate candidate : candidates) {
+                for (Player player : candidate.getTrackedPlayers()) {
+                    PlayerSnapshot snapshot = snapshotByPlayer.get(player);
+                    if (snapshot == null || !candidate.getWorldUUID().equals(snapshot.getWorldUUID())) {
+                        continue;
+                    }
+                    double distanceSq = distanceSquared(snapshot.getX(), snapshot.getY(), snapshot.getZ(), candidate.getX(), candidate.getY(), candidate.getZ());
+                    if (distanceSq <= exitDistanceSq) {
+                        imagesWithinExitByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
+                    }
+                    if (distanceSq <= enterDistanceSq) {
+                        imagesWithinEnterByPlayer.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
                     }
                 }
             }
-        }
 
-        if (ImageFrame.sendAnimatedMapsOnMainThread) {
-            for (Map.Entry<Player, List<Runnable>> entry : sendingTasks.entrySet()) {
-                Scheduler.runTask(ImageFrame.plugin, () -> entry.getValue().forEach(Runnable::run), entry.getKey());
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
+                Set<Integer> previousInRange = new HashSet<>(state.getInRangeAnimatedImageIds());
+                Set<Integer> withinEnter = imagesWithinEnterByPlayer.getOrDefault(player, Collections.emptySet());
+                Set<Integer> withinExit = imagesWithinExitByPlayer.getOrDefault(player, Collections.emptySet());
+
+                state.getInRangeAnimatedImageIds().clear();
+                state.getInRangeAnimatedImageIds().addAll(withinEnter);
+                for (Integer imageIndex : previousInRange) {
+                    if (withinExit.contains(imageIndex)) {
+                        state.getInRangeAnimatedImageIds().add(imageIndex);
+                    }
+                }
             }
-        } else {
-            sendingTasks.values().forEach(list -> list.forEach(Runnable::run));
+
+            Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> throttledUpdateData = new HashMap<>();
+            Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> resetUpdateData = new HashMap<>();
+            Map<Player, Set<Integer>> activeAnimatedImageIds = new HashMap<>();
+
+            for (FrameUpdateCandidate candidate : candidates) {
+                FakeItemUtils.ItemFrameUpdateData throttledItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
+                        candidate.getEntityId(),
+                        getMapItem(candidate.getMapId()),
+                        candidate.getMapView().getId(),
+                        candidate.getMapView(),
+                        candidate.getCurrentPosition());
+                FakeItemUtils.ItemFrameUpdateData resetItemFrameUpdateData = new FakeItemUtils.ItemFrameUpdateData(
+                        candidate.getEntityId(),
+                        candidate.getItemStack(),
+                        candidate.getMapView().getId(),
+                        candidate.getMapView(),
+                        candidate.getCurrentPosition());
+
+                for (Player player : candidate.getTrackedPlayers()) {
+                    if (!canViewAnimated(player, snapshotByPlayer)) {
+                        continue;
+                    }
+                    PlayerAnimationState state = playerStates.get(player);
+                    if (state == null || !state.getInRangeAnimatedImageIds().contains(candidate.getImageIndex())) {
+                        continue;
+                    }
+
+                    MapMarkerEditManager.MapMarkerEditData edit = ImageFrame.mapMarkerEditManager.getActiveEditing(player);
+                    if (edit != null && Objects.equals(edit.getImageMap(), candidate.getImageMap())) {
+                        resetUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(resetItemFrameUpdateData);
+                        continue;
+                    }
+
+                    Set<Integer> knownIds = knownMapIds.get(player);
+                    Set<Integer> pendingIds = pendingKnownMapIds.get(player);
+                    if (knownIds == null || pendingIds == null) {
+                        continue;
+                    }
+                    if (!knownIds.contains(candidate.getMapId())) {
+                        if (!pendingIds.contains(candidate.getMapId())) {
+                            enqueueInitialSend(state, candidate.getImageMap(), pendingIds);
+                        }
+                        continue;
+                    }
+
+                    throttledUpdateData.computeIfAbsent(player, k -> new ArrayList<>()).add(throttledItemFrameUpdateData);
+                    activeAnimatedImageIds.computeIfAbsent(player, k -> new HashSet<>()).add(candidate.getImageIndex());
+                }
+            }
+
+            long now = System.currentTimeMillis();
+            for (Map.Entry<Player, PlayerAnimationState> entry : playerStates.entrySet()) {
+                Player player = entry.getKey();
+                PlayerAnimationState state = entry.getValue();
+                if (!player.isOnline() || now < state.getNextInitialSendAtMs()) {
+                    continue;
+                }
+                processInitialSendQueue(player, state, now);
+            }
+
+            Map<Player, Boolean> allowThrottledUpdates = new HashMap<>();
+            for (PlayerSnapshot snapshot : snapshotByPlayer.values()) {
+                Player player = snapshot.getPlayer();
+                PlayerAnimationState state = playerStates.computeIfAbsent(player, k -> new PlayerAnimationState());
+                if (!snapshot.isViewAnimated()) {
+                    state.setThrottleActive(false);
+                    continue;
+                }
+                int activeCount = activeAnimatedImageIds.getOrDefault(player, Collections.emptySet()).size();
+                boolean throttleActive = activeCount >= ImageFrame.animatedThrottleStartCount;
+                handleThrottleNotice(player, state, throttleActive, now);
+                int divisor = getThrottleDivisor(activeCount);
+                allowThrottledUpdates.put(player, state.shouldSendThrottled(divisor));
+            }
+
+            Map<Player, List<Runnable>> sendingTasks = new HashMap<>();
+            addSendingTasks(throttledUpdateData, sendingTasks, allowThrottledUpdates, false, snapshotByPlayer);
+            addSendingTasks(resetUpdateData, sendingTasks, allowThrottledUpdates, true, snapshotByPlayer);
+
+            for (PlayerSnapshot snapshot : snapshotByPlayer.values()) {
+                Player player = snapshot.getPlayer();
+                if (snapshot.isViewAnimated()) {
+                    MapView mainHandView = snapshot.getMainHandView();
+                    MapView offhandView = snapshot.getOffHandView();
+                    if (mainHandView != null) {
+                        ImageMap mainHandMap = ImageFrame.imageMapManager.getFromMapView(mainHandView);
+                        if (mainHandMap != null && mainHandMap.requiresAnimationService()) {
+                            sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> mainHandMap.send(player));
+                        }
+                    }
+                    if (offhandView != null && !offhandView.equals(mainHandView)) {
+                        ImageMap offHandMap = ImageFrame.imageMapManager.getFromMapView(offhandView);
+                        if (offHandMap != null && offHandMap.requiresAnimationService()) {
+                            sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> offHandMap.send(player));
+                        }
+                    }
+                }
+            }
+
+            if (ImageFrame.sendAnimatedMapsOnMainThread) {
+                for (Map.Entry<Player, List<Runnable>> entry : sendingTasks.entrySet()) {
+                    Scheduler.runTask(ImageFrame.plugin, () -> entry.getValue().forEach(Runnable::run), entry.getKey());
+                }
+            } else {
+                sendingTasks.values().forEach(list -> list.forEach(Runnable::run));
+            }
+        } catch (IllegalPluginAccessException ignored) {
+            // Disable race: this async task can tick during shutdown, so ignore scheduling attempts.
         }
     }
 
-    private void addSendingTasks(Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> updateData, Map<Player, List<Runnable>> sendingTasks, Map<Player, Boolean> allowThrottledUpdates, boolean bypassThrottle, Map<Player, Boolean> viewAnimatedCache) {
+    @Override
+    public void close() {
+        closed = true;
+        updateTask.cancel();
+        HandlerList.unregisterAll(this);
+        if (modernEventsListener != null) {
+            HandlerList.unregisterAll(modernEventsListener);
+        }
+        itemFrames.clear();
+        knownMapIds.clear();
+        pendingKnownMapIds.clear();
+        playerStates.clear();
+        playerSnapshots.clear();
+        lastSentEntityMapIds.clear();
+    }
+
+    private Map<Player, PlayerSnapshot> collectPlayerSnapshots(long deadline, long serviceTick) {
+        int snapshotInterval = Math.max(1, ImageFrame.playerSnapshotIntervalTicks);
+        boolean refreshSnapshots = playerSnapshots.isEmpty() || Math.floorMod(serviceTick, snapshotInterval) == 0;
+        if (refreshSnapshots) {
+            Map<UUID, CompletableFuture<PlayerSnapshot>> futures = new HashMap<>();
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                UUID playerUUID = player.getUniqueId();
+                CompletableFuture<PlayerSnapshot> future = new CompletableFuture<>();
+                Runnable task = () -> {
+                    try {
+                        if (!player.isOnline()) {
+                            future.complete(null);
+                            return;
+                        }
+                        Location location = player.getLocation();
+                        World world = location.getWorld();
+                        if (world == null) {
+                            future.complete(null);
+                            return;
+                        }
+                        ItemStack mainhand = player.getEquipment().getItemInMainHand();
+                        ItemStack offhand = player.getEquipment().getItemInOffHand();
+                        MapView mainHandView = MapUtils.getItemMapView(mainhand);
+                        MapView offhandView = MapUtils.getItemMapView(offhand);
+                        boolean viewAnimated = canViewAnimatedSync(player);
+                        future.complete(new PlayerSnapshot(player, world.getUID(), location.getX(), location.getY(), location.getZ(), viewAnimated, mainHandView, offhandView));
+                    } catch (Throwable e) {
+                        future.complete(null);
+                    }
+                };
+                try {
+                    Scheduler.executeOrScheduleSync(ImageFrame.plugin, task, player);
+                } catch (IllegalPluginAccessException e) {
+                    future.complete(null);
+                }
+                futures.put(playerUUID, future);
+            }
+
+            Set<UUID> onlinePlayers = new HashSet<>();
+            for (Map.Entry<UUID, CompletableFuture<PlayerSnapshot>> entry : futures.entrySet()) {
+                UUID playerUUID = entry.getKey();
+                PlayerSnapshot snapshot;
+                try {
+                    snapshot = entry.getValue().get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+                } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                    snapshot = null;
+                }
+                if (snapshot == null || snapshot.getPlayer() == null || !snapshot.getPlayer().isOnline()) {
+                    playerSnapshots.remove(playerUUID);
+                    continue;
+                }
+                onlinePlayers.add(playerUUID);
+                playerSnapshots.put(playerUUID, snapshot);
+            }
+            playerSnapshots.keySet().retainAll(onlinePlayers);
+        }
+
+        Map<Player, PlayerSnapshot> snapshotsByPlayer = new HashMap<>();
+        for (PlayerSnapshot snapshot : playerSnapshots.values()) {
+            Player player = snapshot.getPlayer();
+            if (player != null && player.isOnline()) {
+                snapshotsByPlayer.put(player, snapshot);
+            }
+        }
+        return snapshotsByPlayer;
+    }
+
+    private Set<Player> collectTrackedPlayers(ItemFrame itemFrame, boolean async, long deadline) {
+        if (itemFrame == null || !itemFrame.isValid() || !isOperational()) {
+            return Collections.emptySet();
+        }
+        boolean isFolia = Scheduler.getPlatform() instanceof FoliaScheduler;
+        if (async && !isFolia) {
+            return NMS.getInstance().getEntityTrackers(itemFrame);
+        }
+
+        CompletableFuture<Set<Player>> future = new CompletableFuture<>();
+        Runnable task = () -> {
+            try {
+                if (!itemFrame.isValid()) {
+                    future.complete(Collections.emptySet());
+                    return;
+                }
+                Set<Player> trackedPlayers;
+                if (isFolia) {
+                    try {
+                        //noinspection deprecation
+                        trackedPlayers = itemFrame.getTrackedPlayers();
+                    } catch (Throwable e) {
+                        trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
+                    }
+                } else {
+                    trackedPlayers = NMS.getInstance().getEntityTrackers(itemFrame);
+                }
+                future.complete(trackedPlayers);
+            } catch (Throwable e) {
+                future.complete(Collections.emptySet());
+            }
+        };
+        try {
+            Scheduler.executeOrScheduleSync(ImageFrame.plugin, task, itemFrame);
+            return future.get(Math.max(0, deadline - System.currentTimeMillis()), TimeUnit.MILLISECONDS);
+        } catch (IllegalPluginAccessException | InterruptedException | ExecutionException | TimeoutException e) {
+            return Collections.emptySet();
+        }
+    }
+
+    private boolean canViewAnimatedSync(Player player) {
+        return ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId())
+                .getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class)
+                .getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true));
+    }
+
+    private void clearEntityMapCache(Player player, List<FakeItemUtils.ItemFrameUpdateData> updates) {
+        Map<Integer, Integer> mapIds = lastSentEntityMapIds.get(player.getUniqueId());
+        if (mapIds == null) {
+            return;
+        }
+        for (FakeItemUtils.ItemFrameUpdateData data : updates) {
+            mapIds.remove(data.getEntityId());
+        }
+    }
+
+    private int getMapId(ItemStack itemStack) {
+        if (itemStack == null || !itemStack.hasItemMeta()) {
+            return Integer.MIN_VALUE;
+        }
+        if (!(itemStack.getItemMeta() instanceof MapMeta)) {
+            return Integer.MIN_VALUE;
+        }
+        MapMeta mapMeta = (MapMeta) itemStack.getItemMeta();
+        return mapMeta.getMapId();
+    }
+
+    private List<FakeItemUtils.ItemFrameUpdateData> filterDuplicateFrameUpdates(Player player, List<FakeItemUtils.ItemFrameUpdateData> updates) {
+        Map<Integer, Integer> mapIds = lastSentEntityMapIds.computeIfAbsent(player.getUniqueId(), k -> new ConcurrentHashMap<>());
+        List<FakeItemUtils.ItemFrameUpdateData> filtered = new ArrayList<>(updates.size());
+        for (FakeItemUtils.ItemFrameUpdateData data : updates) {
+            int mapId = getMapId(data.getItemStack());
+            Integer previous = mapIds.put(data.getEntityId(), mapId);
+            if (previous != null && previous == mapId) {
+                continue;
+            }
+            filtered.add(data);
+        }
+        return filtered;
+    }
+
+    private void addSendingTasks(Map<Player, List<FakeItemUtils.ItemFrameUpdateData>> updateData, Map<Player, List<Runnable>> sendingTasks, Map<Player, Boolean> allowThrottledUpdates, boolean bypassThrottle, Map<Player, PlayerSnapshot> snapshots) {
         for (Map.Entry<Player, List<FakeItemUtils.ItemFrameUpdateData>> entry : updateData.entrySet()) {
             Player player = entry.getKey();
-            if (!canViewAnimated(player, viewAnimatedCache)) {
+            if (!canViewAnimated(player, snapshots)) {
                 continue;
             }
             if (!bypassThrottle && !allowThrottledUpdates.getOrDefault(player, true)) {
                 continue;
             }
+            List<FakeItemUtils.ItemFrameUpdateData> list = entry.getValue();
+            if (bypassThrottle) {
+                clearEntityMapCache(player, list);
+            } else {
+                list = filterDuplicateFrameUpdates(player, list);
+                if (list.isEmpty()) {
+                    continue;
+                }
+            }
             if (ImageFrame.viaHook && ViaHook.isPlayerLegacy(player)) {
                 if (!ImageFrame.viaDisableSmoothAnimationForLegacyPlayers) {
-                    List<FakeItemUtils.ItemFrameUpdateData> list = entry.getValue();
                     for (FakeItemUtils.ItemFrameUpdateData data : list) {
                         sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(
                                 () -> MapUtils.sendImageMap(data.getRealMapId(), data.getMapView(), data.getCurrentPosition(), Collections.singleton(player), true));
                     }
                 }
             } else {
-                sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> FakeItemUtils.sendFakeItemChange(player, entry.getValue()));
+                List<FakeItemUtils.ItemFrameUpdateData> finalList = list;
+                sendingTasks.computeIfAbsent(player, k -> new ArrayList<>()).add(() -> FakeItemUtils.sendFakeItemChange(player, finalList));
             }
         }
     }
@@ -511,16 +755,9 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         return 1 << shift;
     }
 
-    private boolean canViewAnimated(Player player, Map<Player, Boolean> cache) {
-        Boolean cached = cache.get(player);
-        if (cached != null) {
-            return cached;
-        }
-        boolean value = ImageFrame.ifPlayerManager.getIFPlayer(player.getUniqueId())
-                .getPreference(IFPlayerPreference.VIEW_ANIMATED_MAPS, BooleanState.class)
-                .getCalculatedValue(() -> ImageFrame.getPreferenceUnsetValue(player, IFPlayerPreference.VIEW_ANIMATED_MAPS).getRawValue(true));
-        cache.put(player, value);
-        return value;
+    private boolean canViewAnimated(Player player, Map<Player, PlayerSnapshot> snapshots) {
+        PlayerSnapshot snapshot = snapshots.get(player);
+        return snapshot != null && snapshot.isViewAnimated();
     }
 
     private static double distanceSquared(double x1, double y1, double z1, double x2, double y2, double z2) {
@@ -589,6 +826,8 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
                 knownMapIds.put(player, ConcurrentHashMap.newKeySet());
                 pendingKnownMapIds.put(player, ConcurrentHashMap.newKeySet());
                 playerStates.put(player, new PlayerAnimationState());
+                playerSnapshots.remove(player.getUniqueId());
+                lastSentEntityMapIds.remove(player.getUniqueId());
             }
         }, 20, player);
     }
@@ -599,6 +838,8 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         knownMapIds.remove(player);
         pendingKnownMapIds.remove(player);
         playerStates.remove(player);
+        playerSnapshots.remove(player.getUniqueId());
+        lastSentEntityMapIds.remove(player.getUniqueId());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -849,27 +1090,30 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
         }
     }
 
-    public static class PlayerLocationInfo {
+    public static class PlayerSnapshot {
 
-        public static PlayerLocationInfo fromPlayer(Player player) {
-            Location location = player.getLocation();
-            World world = location.getWorld();
-            if (world == null) {
-                return null;
-            }
-            return new PlayerLocationInfo(world.getUID(), location.getX(), location.getY(), location.getZ());
-        }
-
+        private final Player player;
         private final UUID worldUUID;
         private final double x;
         private final double y;
         private final double z;
+        private final boolean viewAnimated;
+        private final MapView mainHandView;
+        private final MapView offHandView;
 
-        public PlayerLocationInfo(UUID worldUUID, double x, double y, double z) {
+        public PlayerSnapshot(Player player, UUID worldUUID, double x, double y, double z, boolean viewAnimated, MapView mainHandView, MapView offHandView) {
+            this.player = player;
             this.worldUUID = worldUUID;
             this.x = x;
             this.y = y;
             this.z = z;
+            this.viewAnimated = viewAnimated;
+            this.mainHandView = mainHandView;
+            this.offHandView = offHandView;
+        }
+
+        public Player getPlayer() {
+            return player;
         }
 
         public UUID getWorldUUID() {
@@ -886,6 +1130,18 @@ public class AnimatedFakeMapManager implements Listener, Runnable {
 
         public double getZ() {
             return z;
+        }
+
+        public boolean isViewAnimated() {
+            return viewAnimated;
+        }
+
+        public MapView getMainHandView() {
+            return mainHandView;
+        }
+
+        public MapView getOffHandView() {
+            return offHandView;
         }
     }
 

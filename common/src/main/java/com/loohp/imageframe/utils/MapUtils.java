@@ -85,6 +85,8 @@ public class MapUtils {
     public static final String GIF_CONTENT_TYPE = "image/gif";
     public static final List<BlockFace> CARTESIAN_BLOCK_FACES = Collections.unmodifiableList(Arrays.asList(BlockFace.NORTH, BlockFace.EAST, BlockFace.SOUTH, BlockFace.WEST, BlockFace.UP, BlockFace.DOWN));
     private static final ConcurrentHashMap<UUID, AtomicInteger> WORLD_DATA_NEXT_ID_CACHE = new ConcurrentHashMap<>();
+    private static final ConcurrentHashMap<UUID, ConcurrentHashMap<Integer, MapPacketState>> PLAYER_MAP_PACKET_STATE = new ConcurrentHashMap<>();
+    private static final int FULL_MAP_PIXELS = MAP_WIDTH * MAP_WIDTH;
 
     @SuppressWarnings("removal")
     private static byte[] generateGrayScale() {
@@ -180,10 +182,34 @@ public class MapUtils {
         }
         ImageMap.ImageMapRenderer imageMapManager = (ImageMap.ImageMapRenderer) optMapRenderer.get();
         for (Player player : players) {
+            UUID playerUUID = player.getUniqueId();
+            ConcurrentHashMap<Integer, MapPacketState> playerState = PLAYER_MAP_PACKET_STATE.computeIfAbsent(playerUUID, k -> new ConcurrentHashMap<>());
             MutablePair<byte[], Collection<MapCursor>> renderData = currentTick < 0 ? imageMapManager.renderPacketData(mapView, player) : imageMapManager.renderPacketData(mapView, currentTick, player);
             byte[] colors = renderData.getFirst();
             Collection<MapCursor> cursors = renderData.getSecond();
-            Object packet = NMS.getInstance().createMapPacket(mapId, colors, cursors);
+            int cursorHash = hashCursors(cursors);
+            MapPacketState previous = playerState.get(mapId);
+
+            if (isUnchanged(previous, colors, cursorHash)) {
+                if (completionCallback != null) {
+                    completionCallback.accept(player, mapId, true);
+                }
+                continue;
+            }
+
+            Object packet;
+            MapPatchData patchData = null;
+            if (ImageFrame.enableMapPacketDiffing && ImageFrame.version == MCVersion.V1_21_8) {
+                patchData = createPatchData(previous, colors, ImageFrame.mapDiffPatchAreaThresholdPercent);
+            }
+            if (patchData != null) {
+                packet = NMS.getInstance().createMapPacket(mapId, patchData.getX(), patchData.getY(), patchData.getWidth(), patchData.getHeight(), patchData.getColors(), cursors);
+            } else {
+                packet = NMS.getInstance().createMapPacket(mapId, colors, cursors);
+            }
+
+            byte[] cachedColors = colors == null ? null : Arrays.copyOf(colors, colors.length);
+            playerState.put(mapId, new MapPacketState(cachedColors, cursorHash));
             if (now) {
                 NMS.getInstance().sendPacket(player, packet);
                 if (completionCallback != null) {
@@ -192,6 +218,155 @@ public class MapUtils {
             } else {
                 ImageFrame.rateLimitedPacketSendingManager.queue(player, packet, completionCallback == null ? null : (p, r) -> completionCallback.accept(p, mapId, r));
             }
+        }
+    }
+
+    public static void clearPlayerMapPacketState(UUID playerUUID) {
+        if (playerUUID == null) {
+            return;
+        }
+        PLAYER_MAP_PACKET_STATE.remove(playerUUID);
+    }
+
+    private static boolean isUnchanged(MapPacketState previous, byte[] colors, int cursorHash) {
+        if (previous == null) {
+            return false;
+        }
+        if (previous.getCursorHash() != cursorHash) {
+            return false;
+        }
+        byte[] previousColors = previous.getColors();
+        if (colors == null) {
+            return previousColors == null;
+        }
+        if (previousColors == null || previousColors.length != colors.length) {
+            return false;
+        }
+        return Arrays.equals(previousColors, colors);
+    }
+
+    private static MapPatchData createPatchData(MapPacketState previous, byte[] colors, int thresholdPercent) {
+        if (previous == null || colors == null || thresholdPercent <= 0) {
+            return null;
+        }
+        byte[] previousColors = previous.getColors();
+        if (previousColors == null || previousColors.length != colors.length || colors.length != FULL_MAP_PIXELS) {
+            return null;
+        }
+
+        int minX = MAP_WIDTH;
+        int minY = MAP_WIDTH;
+        int maxX = -1;
+        int maxY = -1;
+        for (int i = 0; i < colors.length; i++) {
+            if (colors[i] == previousColors[i]) {
+                continue;
+            }
+            int x = i % MAP_WIDTH;
+            int y = i / MAP_WIDTH;
+            if (x < minX) {
+                minX = x;
+            }
+            if (x > maxX) {
+                maxX = x;
+            }
+            if (y < minY) {
+                minY = y;
+            }
+            if (y > maxY) {
+                maxY = y;
+            }
+        }
+        if (maxX < 0 || maxY < 0) {
+            return null;
+        }
+
+        int width = maxX - minX + 1;
+        int height = maxY - minY + 1;
+        int patchPixels = width * height;
+        if ((patchPixels * 100) > (FULL_MAP_PIXELS * thresholdPercent)) {
+            return null;
+        }
+
+        byte[] patch = new byte[patchPixels];
+        for (int y = 0; y < height; y++) {
+            int sourceOffset = (minY + y) * MAP_WIDTH + minX;
+            int targetOffset = y * width;
+            System.arraycopy(colors, sourceOffset, patch, targetOffset, width);
+        }
+        return new MapPatchData(minX, minY, width, height, patch);
+    }
+
+    private static int hashCursors(Collection<MapCursor> cursors) {
+        if (cursors == null || cursors.isEmpty()) {
+            return 1;
+        }
+        int result = 1;
+        for (MapCursor cursor : cursors) {
+            result = 31 * result + cursor.getX();
+            result = 31 * result + cursor.getY();
+            result = 31 * result + cursor.getDirection();
+            result = 31 * result + cursor.getType().ordinal();
+            result = 31 * result + (cursor.isVisible() ? 1 : 0);
+            String caption = cursor.getCaption();
+            result = 31 * result + (caption == null ? 0 : caption.hashCode());
+        }
+        return result;
+    }
+
+    private static class MapPacketState {
+
+        private final byte[] colors;
+        private final int cursorHash;
+
+        private MapPacketState(byte[] colors, int cursorHash) {
+            this.colors = colors;
+            this.cursorHash = cursorHash;
+        }
+
+        private byte[] getColors() {
+            return colors;
+        }
+
+        private int getCursorHash() {
+            return cursorHash;
+        }
+    }
+
+    private static class MapPatchData {
+
+        private final int x;
+        private final int y;
+        private final int width;
+        private final int height;
+        private final byte[] colors;
+
+        private MapPatchData(int x, int y, int width, int height, byte[] colors) {
+            this.x = x;
+            this.y = y;
+            this.width = width;
+            this.height = height;
+            this.colors = colors;
+        }
+
+        private int getX() {
+            return x;
+        }
+
+        private int getY() {
+            return y;
+        }
+
+        private int getWidth() {
+            return width;
+        }
+
+        private int getHeight() {
+            return height;
+        }
+
+        private byte[] getColors() {
+            return colors;
         }
     }
 

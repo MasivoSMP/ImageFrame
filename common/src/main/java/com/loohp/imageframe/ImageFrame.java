@@ -119,6 +119,11 @@ public class ImageFrame extends JavaPlugin {
     public static int animatedThrottleStartCount;
     public static long animatedThrottleNoticeCooldownMs;
     public static boolean animatedThrottleShowRestoreNotice;
+    public static int animatedServiceTickInterval;
+    public static int nonAnimatedFrameRescanTicks;
+    public static int playerSnapshotIntervalTicks;
+    public static int mapDiffPatchAreaThresholdPercent;
+    public static boolean enableMapPacketDiffing;
     public static int startupCacheWarmupThreads;
     public static boolean startupPersistentColorCache;
 
@@ -312,11 +317,17 @@ public class ImageFrame extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        if (animatedFakeMapManager != null) {
+            animatedFakeMapManager.close();
+        }
         if (mapMarkerEditManager != null) {
             mapMarkerEditManager.close();
         }
         if (itemFrameSelectionManager != null) {
             itemFrameSelectionManager.close();
+        }
+        if (ifPlayerManager != null) {
+            ifPlayerManager.close();
         }
         if (imageMapManager != null) {
             imageMapManager.close();
@@ -389,6 +400,11 @@ public class ImageFrame extends JavaPlugin {
         animatedThrottleStartCount = Math.max(1, config.getConfiguration().getInt("Settings.AnimatedThrottleStartCount", 3));
         animatedThrottleNoticeCooldownMs = Math.max(0L, config.getConfiguration().getLong("Settings.AnimatedThrottleNoticeCooldownMs", 3000L));
         animatedThrottleShowRestoreNotice = config.getConfiguration().getBoolean("Settings.AnimatedThrottleShowRestoreNotice", false);
+        animatedServiceTickInterval = Math.max(1, config.getConfiguration().getInt("Settings.AnimatedServiceTickInterval", 1));
+        nonAnimatedFrameRescanTicks = Math.max(1, config.getConfiguration().getInt("Settings.NonAnimatedFrameRescanTicks", 20));
+        playerSnapshotIntervalTicks = Math.max(1, config.getConfiguration().getInt("Settings.PlayerSnapshotIntervalTicks", 2));
+        mapDiffPatchAreaThresholdPercent = Math.max(0, Math.min(100, config.getConfiguration().getInt("Settings.MapDiffPatchAreaThresholdPercent", 40)));
+        enableMapPacketDiffing = config.getConfiguration().getBoolean("Settings.EnableMapPacketDiffing", true);
         startupCacheWarmupThreads = config.getConfiguration().getInt("Settings.Startup.CacheWarmupThreads", 0);
         startupPersistentColorCache = config.getConfiguration().getBoolean("Settings.Startup.PersistentColorCache", true);
 

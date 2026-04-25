@@ -62,6 +62,10 @@ public abstract class NMSWrapper {
 
     public abstract Object createMapPacket(int mapId, byte[] colors, Collection<MapCursor> cursors);
 
+    public Object createMapPacket(int mapId, int x, int y, int width, int height, byte[] colors, Collection<MapCursor> cursors) {
+        return createMapPacket(mapId, colors, cursors);
+    }
+
     public abstract Object createItemFrameItemChangePacket(int entityId, ItemStack itemStack);
 
     public abstract Object createEntityFlagsPacket(Entity entity, Boolean invisible, Boolean glowing);

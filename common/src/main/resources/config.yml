@@ -73,6 +73,16 @@ Settings:
   AnimatedThrottleNoticeCooldownMs: 3000
   #Whether to show an action-bar notice when animated update throttling is lifted
   AnimatedThrottleShowRestoreNotice: false
+  #Tick interval for the animated frame service loop
+  AnimatedServiceTickInterval: 1
+  #Rescan interval (ticks) for non-animated item frames to detect map/item changes
+  NonAnimatedFrameRescanTicks: 20
+  #Tick interval for Folia-safe player snapshots consumed by the animated service
+  PlayerSnapshotIntervalTicks: 2
+  #Maximum changed area percentage to send as a map patch packet instead of full frame
+  MapDiffPatchAreaThresholdPercent: 40
+  #Enable per-player map packet diffing (full packet fallback is used where unsupported)
+  EnableMapPacketDiffing: true
   Startup:
     #How many worker threads should be used for startup map loading and cache warmup.
     #Set to 0 to auto-detect (min(4, max(1, cpu/2))).

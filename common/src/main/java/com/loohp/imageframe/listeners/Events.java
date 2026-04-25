@@ -305,6 +305,7 @@ public class Events implements Listener {
 
     @EventHandler(priority = EventPriority.LOWEST)
     public void onPlayerQuit(PlayerQuitEvent event) {
+        MapUtils.clearPlayerMapPacketState(event.getPlayer().getUniqueId());
         Inventory inventory = event.getPlayer().getInventory();
         processImageFilledMaps(SlotAccessor.of(i -> inventory.getItem(i), (i, s) -> inventory.setItem(i, s)), inventory.getSize());
     }

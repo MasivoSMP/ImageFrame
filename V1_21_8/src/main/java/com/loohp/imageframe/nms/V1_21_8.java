@@ -236,6 +236,13 @@ public class V1_21_8 extends NMSWrapper {
     }
 
     @Override
+    public PacketPlayOutMap createMapPacket(int mapId, int x, int y, int width, int height, byte[] colors, Collection<MapCursor> cursors) {
+        List<MapIcon> mapIcons = cursors == null ? null : cursors.stream().map(this::toNMSMapIcon).collect(Collectors.toList());
+        WorldMap.c c = colors == null ? null : new WorldMap.c(x, y, width, height, colors);
+        return new PacketPlayOutMap(new MapId(mapId), (byte) 0, false, Optional.ofNullable(mapIcons), Optional.ofNullable(c));
+    }
+
+    @Override
     public PacketPlayOutEntityMetadata createItemFrameItemChangePacket(int entityId, ItemStack itemStack) {
         List<DataWatcher.c<?>> dataWatchers = Collections.singletonList(DataWatcher.c.a(EntityItemFrame.d, CraftItemStack.asNMSCopy(itemStack)));
         return new PacketPlayOutEntityMetadata(entityId, dataWatchers);
